@@ -157,7 +157,16 @@ async function boot() {
     const s = state.status;
     const b = $('#banner');
     if (s.mode === 'empty') {
-      b.innerHTML = `<div class="banner"><b>⚠ No data</b><span>Run <code>python -m app.ingest --demo</code> (synthetic) or <code>python -m app.ingest --live</code>, then reload.</span></div>`;
+      const r = s.refresh || {};
+      if (r.enabled) {
+        const failed = !r.running && r.last_error;
+        b.innerHTML = `<div class="banner"><b>${failed ? '⚠ Data not loaded' : '⏳ Loading live data'}</b><span>${failed
+          ? esc(r.last_error) + ' The server will retry every 10 minutes. See the Data &amp; quality tab for per-source errors.'
+          : 'Fetching Bank of Zambia, FRED and copper data. This takes about a minute on first start; the page refreshes by itself.'}</span></div>`;
+        if (!failed) setTimeout(() => location.reload(), 6000);
+      } else {
+        b.innerHTML = `<div class="banner"><b>⚠ No data</b><span>Run <code>python -m app.ingest --live</code> (real data) or <code>python -m app.ingest --demo</code> (synthetic), then reload.</span></div>`;
+      }
       return;
     }
     if (s.mode !== 'live') b.innerHTML = `<div class="banner"><b>⚠ DEMO DATA</b><span>The numbers on screen are synthetic and for development only. They do not describe the real kwacha, copper or Bank of Zambia. Run <code>python -m app.ingest --live</code> for real data.</span></div>`;
@@ -369,7 +378,9 @@ async function dataTab() {
   const el = $('#tab-data');
   try {
     const [s, m] = await Promise.all([api('/api/status'), api('/api/model').catch(() => null)]);
-    el.innerHTML = `<div class="card"><h2>Data inventory &amp; provenance</h2><p class="hint">Every series, where it came from, and whether it is fresh. Anything marked DEMO is synthetic.</p>
+    const rf = s.refresh || {};
+    const rfLine = rf.enabled ? `<p class="hint">Automatic refresh every ${rf.interval_hours}h. ${rf.running ? 'Running now…' : 'Last run finished ' + esc(rf.last_end || '–') + ' (UTC)'}${rf.last_failed && rf.last_failed.length ? '. <b>Failed sources:</b> ' + esc(rf.last_failed.join(', ')) : ''}.</p>` : '';
+    el.innerHTML = `<div class="card"><h2>Data inventory &amp; provenance</h2><p class="hint">Every series, where it came from, and whether it is fresh. Anything marked DEMO is synthetic.</p>${rfLine}
       <table><tr><th>Series</th><th>Source</th><th class="num">Rows</th><th>From</th><th>To</th><th class="num">Age</th><th>Status</th></tr>
       ${s.series.map(x => `<tr><td>${esc(x.name)}<br><span class="sub">${esc(x.series_id)} · ${esc(x.unit)}</span></td><td>${esc(x.source)}</td><td class="num">${x.n_obs}</td><td>${x.first_date}</td><td>${x.last_date}</td><td class="num">${x.age_days}d</td>
         <td>${x.is_demo ? '<span class="tag demo">DEMO</span>' : x.stale ? '<span class="tag bad">stale</span>' : '<span class="tag">ok</span>'}</td></tr>`).join('')}</table></div>

@@ -16,14 +16,15 @@ from .base import SeriesResult
 
 def read_manual(path) -> tuple[pd.Series, str]:
     text = path.read_text(encoding="utf-8")
-    source = "manual CSV"
+    sources: list[str] = []
     lines = []
     for ln in text.splitlines():
         if ln.startswith("#"):
             if ln.lower().startswith("# source:"):
-                source = ln.split(":", 1)[1].strip()
+                sources.append(ln.split(":", 1)[1].strip())
             continue
         lines.append(ln)
+    source = " | ".join(sources) or "manual CSV"
     df = pd.read_csv(io.StringIO("\n".join(lines)))
     df.columns = [c.strip().lower() for c in df.columns]
     df["date"] = pd.to_datetime(df["date"])

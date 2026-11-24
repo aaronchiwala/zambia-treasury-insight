@@ -1,11 +1,13 @@
-"""Data ingestion CLI.
+"""Data ingestion.
 
-    python -m app.ingest --demo     # synthetic data so the app runs end-to-end
+    python -m app.ingest --check    # dry run: fetch everything, validate, print a report, write NOTHING
     python -m app.ingest --live     # BoZ FX + FRED + copper + data/manual/*.csv + data/events.csv
     python -m app.ingest --manual   # only re-read data/manual/*.csv and events
+    python -m app.ingest --demo     # synthetic data so the app runs end-to-end (clearly labelled)
 
-Each connector failure is logged and skipped; one broken feed never blocks the others.
-Live ingest first removes demo rows so synthetic and real data are never mixed.
+Each source runs in isolation: one broken feed never blocks the others, and every series passes the quality
+gate in app/validate.py before it is stored. Demo rows are removed only once real data has been stored, so a
+total network failure never leaves the database empty.
 """
 from __future__ import annotations
 
@@ -14,32 +16,72 @@ import csv
 
 from . import db, demo_data
 from .config import EVENTS_CSV, SERIES
-from .connectors import fred, frankfurter_boz, manual_csv, yahoo
+from .connectors import copper, fred, frankfurter_boz, manual_csv
+from .validate import summarize, validate_series
 
 
-def _store(res) -> bool:
-    sid = res.series_id
-    if res.data.empty:
-        db.log_ingest(sid, 0, "error", res.notes)
-        print(f"  ✗ {sid:14s} no data ({res.notes[:80]})")
-        return False
-    m = SERIES[sid]
-    n = db.upsert_series(sid, res.data, name=m["name"], unit=m["unit"], frequency=m["native"],
-                         source=res.source, is_demo=False, notes=res.notes)
-    db.log_ingest(sid, n, "ok")
-    print(f"  ✓ {sid:14s} {n:6d} rows  {res.data.index.min().date()} → {res.data.index.max().date()}  [{res.source}]")
-    return True
+class Run:
+    """State for one ingest pass."""
 
+    def __init__(self, dry: bool = False, quiet: bool = False):
+        self.dry, self.quiet = dry, quiet
+        self.ok: list[str] = []
+        self.failed: list[str] = []
+        self.rows: list[dict] = []
+        self._demo_cleared = False
 
-def _run(name: str, fn) -> int:
-    print(f"{name}:")
-    try:
-        results = fn()
-    except Exception as e:
-        db.log_ingest(name, 0, "error", repr(e))
-        print(f"  ✗ {name} failed: {e!r}")
-        return 0
-    return sum(_store(r) for r in results)
+    def say(self, msg: str) -> None:
+        if not self.quiet:
+            print(msg)
+
+    def store(self, res) -> bool:
+        sid = res.series_id
+        if res.data.empty:
+            self._fail(sid, res.notes or "no data")
+            return False
+        cleaned, issues = validate_series(sid, res.data, existing_rows=0 if self.dry else db.count_rows(sid))
+        status, msg = summarize(issues)
+        if cleaned is None:
+            self._fail(sid, msg)
+            return False
+        m = SERIES[sid]
+        if not self.dry:
+            if not self._demo_cleared:
+                db.clear_demo()
+                self._demo_cleared = True
+            n = db.upsert_series(sid, cleaned, name=m["name"], unit=m["unit"], frequency=m["native"],
+                                 source=res.source, is_demo=False, notes=res.notes)
+            db.log_ingest(sid, n, status, msg)
+        else:
+            n = len(cleaned)
+        self.ok.append(sid)
+        self.rows.append(dict(series=sid, rows=n, first=str(cleaned.index.min().date()),
+                              last=str(cleaned.index.max().date()), status=status, note=msg, source=res.source))
+        flag = "✓" if status == "ok" else "!"
+        self.say(f"  {flag} {sid:14s} {n:6d} rows  {cleaned.index.min().date()} → {cleaned.index.max().date()}"
+                 f"  [{res.source[:70]}]" + (f"\n      note: {msg}" if msg else ""))
+        return True
+
+    def _fail(self, sid: str, why: str) -> None:
+        self.failed.append(sid)
+        self.rows.append(dict(series=sid, rows=0, first="", last="", status="error", note=why, source=""))
+        if not self.dry:
+            db.log_ingest(sid, 0, "error", why)
+        self.say(f"  ✗ {sid:14s} {why[:150]}")
+
+    def source(self, name: str, fn) -> None:
+        self.say(f"{name}:")
+        try:
+            results = fn()
+        except Exception as e:  # noqa: BLE001 - isolate each source
+            if not self.dry:
+                db.log_ingest(name, 0, "error", repr(e))
+            self.failed.append(name)
+            self.rows.append(dict(series=name, rows=0, first="", last="", status="error", note=repr(e), source=""))
+            self.say(f"  ✗ failed: {str(e)[:200]}")
+            return
+        for r in results:
+            self.store(r)
 
 
 def load_events() -> int:
@@ -50,26 +92,58 @@ def load_events() -> int:
     return db.replace_events(rows, is_demo=False)
 
 
+def run_live(dry: bool = False, quiet: bool = False) -> dict:
+    """Pull every live source plus the manual CSVs. Safe to call repeatedly (idempotent)."""
+    if not dry:
+        db.init()
+    run = Run(dry=dry, quiet=quiet)
+    run.source("Bank of Zambia FX (via Frankfurter)", frankfurter_boz.fetch)
+    run.source("FRED global drivers", fred.fetch)
+    run.source("Copper daily (Yahoo, then Stooq)", copper.fetch)
+    run.source("Manual CSVs (policy rate, inflation, anything you add)", manual_csv.fetch)
+    events = 0
+    if not dry:
+        events = load_events()
+    run.say(f"events loaded: {events}" if not dry else "events: skipped (dry run)")
+    return dict(ok=run.ok, failed=run.failed, rows=run.rows, events=events, dry=dry)
+
+
+def print_report(summary: dict) -> None:
+    print("\n=== Summary ===")
+    print(f"stored OK ({len(summary['ok'])}): {', '.join(summary['ok']) or '-'}")
+    print(f"FAILED   ({len(summary['failed'])}): {', '.join(summary['failed']) or '-'}")
+    core = {"USDZMW", "COPPER_USD", "DXY"}
+    missing = sorted(core - set(summary["ok"]))
+    if missing:
+        print(f"\nCore series missing: {', '.join(missing)}. The app will run, but with reduced explanatory power.")
+        if "USDZMW" in missing:
+            print("USD/ZMW is required. Check the network/proxy, or put your own USDZMW.csv in data/manual/.")
+
+
 def main() -> None:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--demo", action="store_true")
     ap.add_argument("--live", action="store_true")
     ap.add_argument("--manual", action="store_true")
+    ap.add_argument("--check", action="store_true", help="dry run: fetch and validate, write nothing")
     a = ap.parse_args()
-    db.init()
     if a.demo:
+        db.init()
         print(demo_data.load())
         return
+    if a.check:
+        print_report(run_live(dry=True))
+        return
     if a.live:
-        db.clear_demo()
-        _run("Bank of Zambia FX (Frankfurter)", frankfurter_boz.fetch)
-        _run("FRED global drivers", fred.fetch)
-        _run("Copper (Yahoo, best effort)", yahoo.fetch)
-    if a.live or a.manual:
-        _run("Manual CSVs", manual_csv.fetch)
+        print_report(run_live())
+        return
+    if a.manual:
+        db.init()
+        run = Run()
+        run.source("Manual CSVs", manual_csv.fetch)
         print(f"events loaded: {load_events()}")
-    if not (a.demo or a.live or a.manual):
-        ap.print_help()
+        return
+    ap.print_help()
 
 
 if __name__ == "__main__":

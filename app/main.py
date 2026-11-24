@@ -1,6 +1,10 @@
 """FastAPI app: JSON API + static dashboard.   Run:  uvicorn app.main:app --reload"""
 from __future__ import annotations
 
+import base64
+import os
+import secrets
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
@@ -8,20 +12,60 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import db
+from . import db, events_derived
 from .analytics import attribution, backtest, forecast, scenario
 from .analytics.panel import DataError, build_panel
 from .config import GROUP_LABELS, SERIES, TARGET
+from .scheduler import Refresher
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
-app = FastAPI(title="Zambia Treasury Insight", version="0.1.0")
 db.init()
 
 _cache: dict = {}
+
+
+def _warm_cache() -> None:
+    """After a data refresh, precompute the (slow) backtest so the first Forecast click is instant."""
+    _backtest("W-FRI", (1, 4, 8, 12), 2)
+
+
+refresher = Refresher(after=_warm_cache)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    if os.environ.get("ZTI_AUTO_INGEST") == "1":   # set on hosted deployments (see render.yaml)
+        refresher.start()
+    yield
+    refresher.stop()
+
+
+app = FastAPI(title="Zambia Treasury Insight", version="0.2.0", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def optional_basic_auth(request, call_next):
+    """If ZTI_PASSWORD is set, every route except /api/health needs HTTP Basic credentials."""
+    password = os.environ.get("ZTI_PASSWORD")
+    if not password or request.url.path == "/api/health":
+        return await call_next(request)
+    user = os.environ.get("ZTI_USER", "treasury")
+    ok = False
+    header = request.headers.get("authorization", "")
+    if header.lower().startswith("basic "):
+        try:
+            u, _, p = base64.b64decode(header[6:]).decode("utf-8").partition(":")
+            ok = secrets.compare_digest(u.encode(), user.encode()) and secrets.compare_digest(p.encode(), password.encode())
+        except Exception:  # noqa: BLE001 - malformed header means not authenticated
+            ok = False
+    if ok:
+        return await call_next(request)
+    return Response("Authentication required", status_code=401,
+                    headers={"WWW-Authenticate": 'Basic realm="Zambia Treasury Insight"'})
 
 
 def cached(fn):
@@ -38,7 +82,13 @@ def cached(fn):
 
 
 def _events_for_mode() -> list[dict]:
-    return db.load_events(is_demo=(db.data_mode() == "demo"))
+    mode = db.data_mode()
+    events = db.load_events(is_demo=(mode == "demo"))
+    if mode != "demo":
+        meta = db.series_meta().get("POLICY_RATE")
+        if meta and not meta["is_demo"]:
+            events = events_derived.merge(events, events_derived.from_policy_rate(db.load_series("POLICY_RATE")))
+    return events
 
 
 def _panel(freq: str):
@@ -72,8 +122,16 @@ def status():
         notes.append("Synthetic demo data is loaded. Values are NOT real market data.")
     if TARGET not in meta:
         notes.append("No USD/ZMW series loaded.")
+    if refresher.state.get("last_error"):
+        notes.append("Last automatic refresh: " + str(refresher.state["last_error"]))
     return dict(mode=mode, series=sorted(series, key=lambda s: s["series_id"]), notes=notes,
-                ingest_log=db.recent_ingest_log(12), server_time=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+                refresh=dict(refresher.state), ingest_log=db.recent_ingest_log(12),
+                server_time=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+
+
+@app.get("/api/health")
+def health():
+    return dict(ok=True)
 
 
 @app.get("/api/overview")

@@ -1,0 +1,22 @@
+# Render Blueprint: Render reads this file when you create the service from the GitHub repo.
+services:
+  - type: web
+    name: zambia-treasury-insight
+    runtime: python
+    plan: free                      # free instances sleep when idle; see docs/DEPLOY_RENDER.md
+    buildCommand: pip install -r requirements.txt
+    # ONE worker only: the background data refresh runs inside the web process.
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    autoDeploy: true                # redeploys on every push to the connected branch
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: ZTI_AUTO_INGEST        # pull live data on start and then every ZTI_REFRESH_HOURS
+        value: "1"
+      - key: ZTI_REFRESH_HOURS
+        value: "12"
+      - key: ZTI_USER
+        value: treasury
+      - key: ZTI_PASSWORD           # you type this in the Render dashboard; it is not stored in the repo
+        sync: false

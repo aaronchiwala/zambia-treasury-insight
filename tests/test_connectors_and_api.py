@@ -36,7 +36,7 @@ def test_manual_seed_files_parse():
     s, src = manual_csv.read_manual(MANUAL_DIR / "POLICY_RATE.csv")
     assert s.iloc[-1] == 10.75 and "Bank of Zambia" in src
     cpi, _ = manual_csv.read_manual(MANUAL_DIR / "CPI_YOY.csv")
-    assert cpi.index.is_monotonic_increasing and len(cpi) == 11
+    assert cpi.index.is_monotonic_increasing and len(cpi) == 78
 
 
 def test_status_flags_demo_mode():

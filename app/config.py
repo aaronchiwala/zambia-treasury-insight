@@ -32,7 +32,17 @@ SERIES: dict[str, dict] = {
     "POLICY_RATE": dict(name="Bank of Zambia policy rate", unit="percent", native="E", kind="rate"),
     "CPI_YOY": dict(name="Zambia annual inflation", unit="percent", native="M", kind="rate"),
     "RESERVES_USD": dict(name="Gross international reserves", unit="USD million", native="M", kind="price"),
+    "VIX": dict(name="VIX equity volatility index (global risk appetite)", unit="index", native="D", kind="price"),
 }
+
+# Plausible value ranges (unit-error / bad-feed guard) and "unusually large one-step move" flags.
+PLAUSIBLE: dict[str, tuple[float, float]] = {
+    "USDZMW": (1.0, 60.0), "COPPER_USD": (1500.0, 20000.0), "COPPER_USD_M": (1500.0, 20000.0),
+    "DXY": (60.0, 200.0), "BRENT_USD": (5.0, 200.0), "US10Y": (-1.0, 20.0), "VIX": (5.0, 100.0),
+    "POLICY_RATE": (0.0, 80.0), "CPI_YOY": (-5.0, 100.0), "RESERVES_USD": (100.0, 50000.0),
+}
+JUMP_LOG = {"USDZMW": 0.15, "COPPER_USD": 0.15, "DXY": 0.05, "BRENT_USD": 0.4, "VIX": 0.9, "RESERVES_USD": 0.5}
+JUMP_PP = {"US10Y": 1.0, "CPI_YOY": 4.0, "POLICY_RATE": 10.0}
 
 # Modelling groups: the driver name shown to users -> candidate series, finest first.
 GROUPS: dict[str, list[str]] = {
@@ -44,6 +54,7 @@ GROUPS: dict[str, list[str]] = {
     "POLICY_RATE": ["POLICY_RATE"],
     "CPI": ["CPI_YOY"],
     "RESERVES": ["RESERVES_USD"],
+    "VIX": ["VIX"],
 }
 
 GROUP_LABELS = {
@@ -54,6 +65,7 @@ GROUP_LABELS = {
     "POLICY_RATE": "BoZ policy rate",
     "CPI": "Zambia inflation",
     "RESERVES": "FX reserves",
+    "VIX": "Global risk appetite (VIX)",
 }
 
 NATIVE_RANK = {"D": 1, "E": 1, "W": 2, "M": 3, "Q": 4}

@@ -15,6 +15,7 @@ FRED_SERIES = {
     "BRENT_USD": ("DCOILBRENTEU", "Europe Brent spot price (daily)."),
     "US10Y": ("DGS10", "US 10-year constant-maturity Treasury yield (daily)."),
     "COPPER_USD_M": ("PCOPPUSDM", "Global copper price (monthly, IMF via FRED), USD per metric tonne."),
+    "VIX": ("VIXCLS", "CBOE Volatility Index (daily): global risk appetite, matters for frontier currencies."),
 }
 
 

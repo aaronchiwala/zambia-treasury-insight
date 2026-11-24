@@ -33,9 +33,10 @@ CREATE TABLE IF NOT EXISTS ingest_log(
 @contextmanager
 def connect():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(DB_PATH)
+    con = sqlite3.connect(DB_PATH, timeout=30)
     con.row_factory = sqlite3.Row
     try:
+        con.execute("PRAGMA journal_mode=WAL")  # background refresh can write while the API reads
         yield con
         con.commit()
     finally:
@@ -145,7 +146,19 @@ def data_mode() -> str:
 
 
 def db_stamp() -> float:
-    try:
-        return DB_PATH.stat().st_mtime
-    except FileNotFoundError:
-        return 0.0
+    """Change marker used to invalidate caches. With WAL, writes land in the -wal file first."""
+    stamp = 0.0
+    for p in (DB_PATH, DB_PATH.with_name(DB_PATH.name + "-wal")):
+        try:
+            stamp = max(stamp, p.stat().st_mtime)
+        except FileNotFoundError:
+            pass
+    return stamp
+
+
+def count_rows(series_id: str) -> int:
+    """Stored rows of a REAL series (synthetic demo rows never count as history worth protecting)."""
+    with connect() as con:
+        return int(con.execute(
+            "SELECT COUNT(*) FROM observations o JOIN series_meta m ON m.series_id=o.series_id "
+            "WHERE o.series_id=? AND m.is_demo=0", (series_id,)).fetchone()[0])

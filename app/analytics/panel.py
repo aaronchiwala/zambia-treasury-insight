@@ -76,6 +76,11 @@ def build_panel(freq: str = DEFAULT_FREQ) -> Panel:
         kinds[group] = SERIES[picked]["kind"]
 
     levels = pd.DataFrame(cols).sort_index()
+    # Step series (policy rate) persist until the next change: carry them to the end of the panel, otherwise
+    # the latest weeks are NaN and the driver forecast silently falls back to the random walk on live data.
+    for g, sid in used.items():
+        if SERIES[sid]["native"] == "E":
+            levels[g] = levels[g].ffill()
     levels = levels[levels[TARGET].notna() | (levels.index <= levels[TARGET].last_valid_index())]
     levels = levels.loc[levels[TARGET].first_valid_index():]
 

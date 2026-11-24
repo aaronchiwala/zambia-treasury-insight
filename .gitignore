@@ -1,4 +1,7 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-data/zti.sqlite
+.venv/
+data/*.sqlite
+data/*.sqlite-wal
+data/*.sqlite-shm

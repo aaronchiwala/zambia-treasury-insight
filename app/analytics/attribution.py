@@ -57,8 +57,10 @@ def _select_common_sample(df: pd.DataFrame, drivers: list[str], min_obs: int):
     return df[[TARGET]].dropna(), [], excluded
 
 
-def fit_driver_model(panel: Panel, window: int | None = None, min_obs: int = 104,
+def fit_driver_model(panel: Panel, window: int | None = None, min_obs: int | None = None,
                      end: pd.Timestamp | None = None, drivers: list[str] | None = None) -> DriverFit:
+    if min_obs is None:
+        min_obs = 104 if panel.freq == "W-FRI" else 48   # two years of weekly / four years of monthly data
     df = panel.returns.copy()
     if end is not None:
         df = df.loc[:end]

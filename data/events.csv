@@ -1,10 +1,13 @@
 date,title,category,description,source,verified
-2020-11-13,Zambia misses Eurobond coupon,sovereign,Grace period lapsed on a Eurobond coupon; Zambia became the first African sovereign default of the pandemic era.,Widely reported; confirm exact date against BoZ/MoF notice,0
+2020-11-13,Zambia misses Eurobond coupon,sovereign,Grace period lapsed on a Eurobond coupon; Zambia became the first African sovereign default of the pandemic era.,Widely reported; confirm exact date against MoF notice,0
 2021-08-12,General election,political,Opposition candidate Hakainde Hichilema won the presidency.,Widely reported; confirm,0
-2022-08-31,IMF approves Extended Credit Facility,programme,IMF Executive Board approved Zambia's ECF arrangement.,Widely reported; confirm,0
+2022-08-31,IMF approves Extended Credit Facility,programme,IMF Executive Board approved a new ECF arrangement for Zambia.,IMF Press Release 22/297 (dated 2022-08-31),1
+2023-12-20,IMF completes 2nd ECF review,programme,IMF Executive Board completed the second review and approved a disbursement.,IMF Press Release 23/468,1
 2024-02-29,Drought declared a national disaster,climate,Severe drought hit hydropower and agriculture; load-shedding followed.,Widely reported; confirm,0
+2024-06-26,IMF completes 3rd ECF review,programme,IMF completed the third review and approved an augmentation.,IMF Press Release 24/242,1
+2025-09-15,IMF approves extension of ECF arrangement,programme,IMF approved an extension of the Extended Credit Facility arrangement.,IMF Press Release 25/294,1
 2025-11-12,BoZ cuts policy rate to 14.25%,monetary,First policy-rate cut since August 2020.,Trading Economics / Bank of Zambia,1
-2026-01-27,IMF Executive Board considers ECF review,programme,Board consideration of the staff report following discussions that ended Nov 4 2025.,IMF Country Report 2026,1
+2026-01-27,IMF completes 6th ECF review,programme,Board consideration of the staff report following discussions that ended Nov 4 2025.,IMF Press Release 26/024,1
 2026-02-11,BoZ cuts policy rate 75bp to 13.5%,monetary,Larger-than-expected cut (analysts expected ~14.0%); inflation falling.,Reuters / Nairametrics / Lusaka Times,1
 2026-05-13,BoZ cuts policy rate 25bp to 13.25%,monetary,Cut despite Middle East conflict risks; economists polled by Reuters had expected a hold.,Reuters / Lusaka Times,1
 2026-08-13,General election (August 2026),political,Presidential and parliamentary elections; exact date to be confirmed.,IMF/AfDB commentary referencing August 2026 elections,0

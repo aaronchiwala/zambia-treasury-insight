@@ -34,7 +34,9 @@ class Pred:
 
 
 class ForecastContext:
-    def __init__(self, panel: Panel, k: int = 4, min_obs: int = 104):
+    def __init__(self, panel: Panel, k: int = 4, min_obs: int | None = None):
+        if min_obs is None:
+            min_obs = 104 if panel.freq == "W-FRI" else 48
         self.panel = panel
         rets = panel.returns
         _, keep, self.excluded = _select_common_sample(rets, panel.drivers, min_obs)
