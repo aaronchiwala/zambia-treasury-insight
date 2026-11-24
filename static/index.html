@@ -69,6 +69,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .two { display: grid; gap: 16px; grid-template-columns: 1fr 1fr; }
 @media (max-width: 860px) { .two { grid-template-columns: 1fr; } }
 .story li { margin-bottom: 6px; }
+.sw { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:7px; }
 .tag { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--axis); color: var(--ink2); }
 .tag.demo { border-color: var(--warn); color: var(--ink); background: var(--warnbg); }
 .tag.bad { border-color: var(--crit); color: var(--crit); }
@@ -93,6 +94,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   <nav id="nav">
     <button data-tab="overview" class="on">Overview</button>
     <button data-tab="explain">What happened &amp; why</button>
+    <button data-tab="history">Drivers through history</button>
     <button data-tab="forecast">Forecast</button>
     <button data-tab="scenario">Scenarios</button>
     <button data-tab="data">Data &amp; quality</button>
@@ -102,6 +104,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   <div id="banner"></div>
   <section id="tab-overview"></section>
   <section id="tab-explain" class="hidden"></section>
+  <section id="tab-history" class="hidden"></section>
   <section id="tab-forecast" class="hidden"></section>
   <section id="tab-scenario" class="hidden"></section>
   <section id="tab-data" class="hidden"></section>
@@ -148,7 +151,7 @@ function show(tab) {
   state.tab = tab;
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
   document.querySelectorAll('main > section').forEach(s => s.classList.toggle('hidden', s.id !== 'tab-' + tab));
-  if (!state.rendered[tab]) { state.rendered[tab] = true; ({overview, explain, forecast, scenario, data: dataTab})[tab](); }
+  if (!state.rendered[tab]) { state.rendered[tab] = true; ({overview, explain, history: historyTab, forecast, scenario, data: dataTab})[tab](); }
 }
 
 async function boot() {
@@ -369,6 +372,43 @@ async function runScenario() {
       <tr><td>Full history</td><td class="num">${sgn(r.full_history.impact_pct)}%</td><td class="num">${fmt(r.full_history.r2)}</td><td class="num">${r.full_history.n}</td></tr></table>
       <p class="hint">If these two rows disagree, the relationship has changed over time (e.g. before vs after debt restructuring): lean on the wider range.</p></div>`;
   } catch (e) { showErr(out, e); }
+}
+
+/* ---------- drivers through history ---------- */
+async function historyTab() {
+  const el = $('#tab-history');
+  el.innerHTML = '<p class="hint">Analysing every major swing in the kwacha…</p>';
+  try {
+    const h = await api('/api/history?threshold=' + (state.hthr || 8));
+    const palette = [css('--s1'), css('--s2'), css('--s3'), css('--s4'), css('--s5'), css('--s6')];
+    const labels = [...new Set(h.episodes.flatMap(e => e.drivers.map(d => d.label)))];
+    const colour = {}; labels.forEach((l, i) => colour[l] = palette[i % palette.length]);
+    const un = css('--axis');
+    const pp = v => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(1);
+    const sum = h.summary.map(x => `<tr><td><i class="sw" style="background:${colour[x.label] || un}"></i>${esc(x.label)}</td><td class="num">${(x.share * 100).toFixed(0)}%</td><td class="num">${x.avg_abs_pp.toFixed(1)}pp</td></tr>`).join('');
+    const rows = h.episodes.map(e => {
+      const top = e.drivers.filter(d => Math.abs(d.contribution_pp) >= 0.5).slice(0, 3).map(d => `${esc(d.label)} ${pp(d.contribution_pp)}pp${d.significant ? '' : '?'}`).join('<br>');
+      return `<tr><td>${e.start}<br><span class="sub">→ ${e.end} · ${e.periods}w</span></td>
+        <td class="num"><b>${e.change_pct >= 0 ? '▲ weaker' : '▼ stronger'} ${Math.abs(e.change_pct).toFixed(1)}%</b><br><span class="sub">${e.level_start.toFixed(2)} → ${e.level_end.toFixed(2)}</span></td>
+        <td>${esc(e.dominant)}${e.in_model_sample ? '' : ' <span class="tag demo">before model data</span>'}<br><span class="sub">${top || '–'}</span></td>
+        <td class="num">${pp(e.unexplained_pp)}pp</td><td>${e.events.map(esc).join('<br>') || '<span class="sub">–</span>'}</td></tr>`;
+    }).join('');
+    el.innerHTML = `<div class="card"><h2>What drove the kwacha across its history</h2>
+      <p class="hint">The history from ${h.data_start} to ${h.data_end} is split into sustained swings (a new swing starts when the rate reverses by more than ${h.threshold_pct}%). Each swing is attributed with one model fitted on ${h.model.sample[0]} → ${h.model.sample[1]} (R² ${h.model.r2.toFixed(2)}; drivers: ${h.model.drivers.map(esc).join(', ')}). Associations, not proven causes. A “?” means the link is not statistically significant.</p>
+      <div class="row"><label>Swing size</label>${[5, 8, 12, 20].map(t => `<button class="btn ${(state.hthr || 8) === t ? 'sel' : ''}" data-t="${t}">${t}%</button>`).join('')}</div>
+      ${h.model.excluded.length ? `<div class="banner"><b>Not in the model</b><span>${h.model.excluded.map(x => esc(x.driver) + ' (' + esc(x.reason) + ')').join('; ')}</span></div>` : ''}</div>
+      <div class="card"><h2>Overall: which drivers explain the swings</h2>
+      <p class="hint">Average size of each driver's contribution across the ${h.covered_episodes} swings that fall inside the model's data. “Unexplained” is the part no tracked driver accounts for, typically domestic policy, debt news and flows.</p>
+      <table><tr><th>Driver</th><th class="num">Share</th><th class="num">Avg. contribution</th></tr>${sum}</table></div>
+      <div class="card"><h2>Calendar years</h2><p class="hint">Percentage points of USD/ZMW change each year, by driver. Bars add up to the year's total move.</p><div id="hy-chart" class="chart"></div></div>
+      <div class="card"><h2>Every major swing</h2><div style="overflow-x:auto"><table><tr><th>Window</th><th class="num">Move</th><th>Main driver</th><th class="num">Unexplained</th><th>Events</th></tr>${rows}</table></div></div>`;
+    el.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { state.hthr = +b.dataset.t; state.rendered.history = false; show('history'); });
+    const yrs = h.years.map(y => String(y.year));
+    const traces = labels.map(l => ({ type: 'bar', name: l, x: yrs, marker: { color: colour[l] },
+      y: h.years.map(y => (y.drivers.find(d => d.label === l) || { contribution_pp: 0 }).contribution_pp) }));
+    traces.push({ type: 'bar', name: 'Unexplained', x: yrs, marker: { color: un }, y: h.years.map(y => y.unexplained_pp + y.drift_pp) });
+    Plotly.react('hy-chart', traces, layout({ barmode: 'relative', legend: { orientation: 'h', y: -0.15 }, yaxis: { gridcolor: css('--grid'), title: 'pp of USD/ZMW change' } }), cfg);
+  } catch (e) { showErr(el, e); }
 }
 
 /* ---------- data & quality ---------- */

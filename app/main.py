@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import db, events_derived, ingest, upload as upload_mod
-from .analytics import attribution, backtest, forecast, scenario
+from .analytics import attribution, backtest, forecast, history, scenario
 from .analytics.panel import DataError, build_panel
 from .config import GROUP_LABELS, SERIES, TARGET
 from .scheduler import Refresher
@@ -284,6 +284,17 @@ def explain(start: str, end: str, freq: str = "W-FRI", window: int | None = None
     res["shocks"] = attribution.shock_periods(p, fit, _events_for_mode())[-12:]
     res["skipped"] = p.skipped
     return res
+
+
+@app.get("/api/history")
+def history_drivers(threshold: float = Query(8.0, ge=3.0, le=30.0), freq: str = "W-FRI"):
+    """Major swings in USD/ZMW over the whole history, each attributed to drivers."""
+    p = _panel(freq)
+    try:
+        fit = attribution.fit_driver_model(p)
+        return history.historical_drivers(p, fit, _events_for_mode(), threshold / 100)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
 
 
 @app.get("/api/model")

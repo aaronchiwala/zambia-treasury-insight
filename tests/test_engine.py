@@ -109,3 +109,15 @@ def test_scenario_signs_make_economic_sense(panel):
 def test_scenario_rejects_unavailable_driver(panel):
     with pytest.raises(ValueError):
         scenario.run_scenario(panel, {"RESERVES": -10.0}, 12, 156)
+
+
+def test_history_episodes_and_years_add_up():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    j = TestClient(app).get("/api/history?threshold=8").json()
+    assert j["total_episodes"] >= 5 and j["years"]
+    for e in j["episodes"]:
+        total = sum(d["contribution_pp"] for d in e["drivers"]) + e["drift_pp"] + e["unexplained_pp"]
+        assert abs(total - e["log_change_pp"]) < 1e-6        # decomposition is exact
+    ends = [e["end"] for e in j["episodes"]]; starts = [e["start"] for e in j["episodes"]]
+    assert all(a >= b for a, b in zip(starts[1:], ends[:-1]))   # episodes do not overlap
