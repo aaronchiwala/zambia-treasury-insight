@@ -25,7 +25,8 @@ DEFAULT_FREQ = "W-FRI"  # core modelling frequency (weekly, Friday close)
 SERIES: dict[str, dict] = {
     "USDZMW": dict(name="USD/ZMW (kwacha per US dollar)", unit="ZMW per USD", native="D", kind="price"),
     "COPPER_USD": dict(name="Copper (daily, COMEX front-month)", unit="USD per tonne", native="D", kind="price"),
-    "COPPER_USD_M": dict(name="Copper (monthly global price)", unit="USD per tonne", native="M", kind="price"),
+    "COPPER_USD_M": dict(name="Copper (monthly global price)", unit="USD per tonne", native="M", kind="price",
+                         stale_days=110),   # IMF series dated the 1st, published ~5-6 weeks after month end
     "DXY": dict(name="US dollar index (broad)", unit="index", native="D", kind="price"),
     "BRENT_USD": dict(name="Brent crude", unit="USD per barrel", native="D", kind="price"),
     "US10Y": dict(name="US 10-year Treasury yield", unit="percent", native="D", kind="rate"),

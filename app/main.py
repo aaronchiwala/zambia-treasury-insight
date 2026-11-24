@@ -131,7 +131,8 @@ def status():
     for sid, m in meta.items():
         last = pd.Timestamp(m["last_date"]) if m["last_date"] else None
         age = int((today - last).days) if last is not None else None
-        stale_limit = {"D": 7, "E": 200, "W": 14, "M": 75, "Q": 130}.get(SERIES.get(sid, {}).get("native", "D"), 14)
+        reg = SERIES.get(sid, {})
+        stale_limit = reg.get("stale_days") or {"D": 7, "E": 200, "W": 14, "M": 75, "Q": 130}.get(reg.get("native", "D"), 14)
         series.append(dict(series_id=sid, name=m["name"], unit=m["unit"], native=SERIES.get(sid, {}).get("native"),
                            source=m["source"], is_demo=bool(m["is_demo"]), n_obs=m["n_obs"], first_date=m["first_date"],
                            last_date=m["last_date"], age_days=age, stale=bool(age is not None and age > stale_limit),
