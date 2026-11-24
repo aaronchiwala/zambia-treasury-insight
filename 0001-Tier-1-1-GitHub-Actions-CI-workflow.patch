@@ -1,0 +1,78 @@
+From ab2a8a742dac4784e139ebab7a501b1f62427b30 Mon Sep 17 00:00:00 2001
+From: Zambia Treasury Insight <patch@local>
+Date: Tue, 24 Nov 2026 18:21:42 +0000
+Subject: [PATCH 01/12] Tier 1 #1: GitHub Actions CI workflow
+
+Runs the 70-test suite on every push to main and every PR. Uses Python 3.12
+(matching render.yaml), pip-caches requirements.txt, and smoke-tests that the
+FastAPI app boots and /api/health responds.
+
+Catches regressions before Render auto-deploys.
+---
+ .github/workflows/ci.yml | 54 ++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 54 insertions(+)
+ create mode 100644 .github/workflows/ci.yml
+
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+new file mode 100644
+index 0000000..57f538c
+--- /dev/null
++++ b/.github/workflows/ci.yml
+@@ -0,0 +1,54 @@
++name: CI
++
++# Runs on every push to main and on every pull request. Catches regressions
++# before they hit Render's auto-deploy.
++
++on:
++  push:
++    branches: [main]
++  pull_request:
++    branches: [main]
++
++jobs:
++  test:
++    runs-on: ubuntu-latest
++    timeout-minutes: 10
++    env:
++      ZTI_DB: /tmp/zti_test.sqlite
++      ZTI_AUTO_INGEST: "0"
++      # No ZTI_PASSWORD: tests exercise the unauthenticated path.
++
++    steps:
++      - uses: actions/checkout@v4
++
++      - name: Set up Python
++        uses: actions/setup-python@v5
++        with:
++          python-version: "3.12"
++          cache: pip
++          cache-dependency-path: requirements.txt
++
++      - name: Install dependencies
++        run: |
++          python -m pip install --upgrade pip
++          pip install -r requirements.txt
++
++      - name: Show environment
++        run: |
++          python --version
++          python -c "import pandas, numpy, statsmodels, sklearn, fastapi; print('core deps ok')"
++
++      - name: Run tests
++        run: pytest -v --tb=short
++
++      - name: Smoke-test the app boots
++        run: |
++          python -c "
++          from fastapi.testclient import TestClient
++          from app.main import app
++          with TestClient(app) as c:
++              r = c.get('/api/health')
++              assert r.status_code == 200, r.status_code
++              assert r.json() == {'ok': True}, r.json()
++              print('health endpoint OK')
++          "
+-- 
+2.47.3
+

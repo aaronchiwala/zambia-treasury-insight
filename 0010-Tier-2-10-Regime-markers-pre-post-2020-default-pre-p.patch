@@ -1,0 +1,174 @@
+From c949b4740d785e9fdcc61ed5ff339373a8f83245 Mon Sep 17 00:00:00 2001
+From: Zambia Treasury Insight <patch@local>
+Date: Tue, 24 Nov 2026 18:41:42 +0000
+Subject: [PATCH 10/12] =?UTF-8?q?Tier=202=20#10:=20Regime=20markers=20?=
+ =?UTF-8?q?=E2=80=94=20pre/post=202020=20default,=20pre/post=202022=20IMF?=
+ =?UTF-8?q?=20ECF?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Adds explicit regime breakpoints in app/config.py::REGIMES with four regimes:
+
+  pre_redenom      2001-01-01 -> 2013-01-01   Pre-redenomination (ZMK)
+  pre_default      2013-01-01 -> 2020-11-13   Pre-Eurobond default
+  default_no_imf   2020-11-13 -> 2022-08-31   Eurobond default, no IMF programme
+  imf_ecf          2022-08-31 -> today         IMF Extended Credit Facility
+
+Each regime carries a one-sentence narrative explaining the macro anchor.
+
+Two new pieces of API surface:
+
+  GET /api/regimes       -> the regime list (start, end, key, label, narrative)
+  GET /api/events        -> now tags each event with regime + regime_label
+
+The regime_for(date) helper in config.py does the date-window lookup. The UI
+can now draw vertical bands at the breakpoints and colour-code events by regime.
+
+The scenario module's existing empirical regime-sensitivity detector (recent
+vs full-history betas) continues to run alongside these explicit breakpoints.
+
+75 tests passing (1 new).
+---
+ app/config.py                    | 44 ++++++++++++++++++++++++++++++++
+ app/main.py                      | 24 +++++++++++++++--
+ tests/test_connectors_and_api.py | 29 +++++++++++++++++++++
+ 3 files changed, 95 insertions(+), 2 deletions(-)
+
+diff --git a/app/config.py b/app/config.py
+index b57d216..ac0bb75 100644
+--- a/app/config.py
++++ b/app/config.py
+@@ -93,3 +93,47 @@ GROUP_LABELS = {
+ NATIVE_RANK = {"D": 1, "E": 1, "W": 2, "M": 3, "Q": 4}
+ FREQ_RANK = {"W-FRI": 2, "ME": 3}
+ PERIODS_PER_YEAR = {"W-FRI": 52, "ME": 12}
++
++# --- Regime markers ---
++# Zambia's USD/ZMW behaviour has shifted across distinct policy/market regimes.
++# These breakpoints are used by /api/regimes and to tag events in /api/events, and
++# the UI can draw vertical bands at these dates. They are deliberately a small,
++# defensible list — every breakpoint must have a clear narrative anchor.
++REGIMES: list[dict] = [
++    dict(
++        start="2001-01-01", end="2013-01-01",
++        key="pre_redenom",
++        label="Pre-redenomination (ZMK)",
++        narrative="Old kwacha era. The Bank of Zambia's REER sheet back-adjusts these rates to new-kwacha terms so the series is continuous across the 2013 1000:1 redenomination.",
++    ),
++    dict(
++        start="2013-01-01", end="2020-11-13",
++        key="pre_default",
++        label="Pre-Eurobond default",
++        narrative="Post-redenomination era of managed FX. BoZ intervened regularly; the kwacha traded in a 5-15 range against the dollar.",
++    ),
++    dict(
++        start="2020-11-13", end="2022-08-31",
++        key="default_no_imf",
++        label="Eurobond default, no IMF programme",
++        narrative="Zambia became the first African sovereign default of the pandemic era on 2020-11-13. The kwacha depreciated sharply; no external financing anchor.",
++    ),
++    dict(
++        start="2022-08-31", end=None,
++        key="imf_ecf",
++        label="IMF Extended Credit Facility",
++        narrative="IMF Executive Board approved an ECF arrangement on 2022-08-31 (Press Release 22/297). Six reviews completed through Jan 2026; the kwacha stabilised then strengthened through 2024-2026 as the programme anchored policy.",
++    ),
++]
++
++
++def regime_for(date) -> dict | None:
++    """Return the regime dict whose [start, end) window contains `date`, or None."""
++    import pandas as pd
++    d = pd.Timestamp(date)
++    for r in REGIMES:
++        start = pd.Timestamp(r["start"])
++        end = pd.Timestamp(r["end"]) if r["end"] else pd.Timestamp.max
++        if start <= d < end:
++            return r
++    return None
+diff --git a/app/main.py b/app/main.py
+index 9949b95..593083f 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
+ from . import db, events_derived, ingest, upload as upload_mod
+ from .analytics import attribution, backtest, forecast, history, scenario
+ from .analytics.panel import DataError, build_panel
+-from .config import GROUP_LABELS, SERIES, TARGET
++from .config import GROUP_LABELS, REGIMES, SERIES, TARGET, regime_for
+ from .scheduler import Refresher
+ from .validate import summarize, validate_series
+ 
+@@ -320,7 +320,27 @@ def series(ids: str = Query(TARGET), start: str | None = None, end: str | None =
+ 
+ @app.get("/api/events")
+ def events():
+-    return dict(events=_events_for_mode(), mode=db.data_mode())
++    # Tag each event with the regime it falls in, so the UI can colour-code by regime.
++    evts = _events_for_mode()
++    for e in evts:
++        r = regime_for(e["date"])
++        if r:
++            e["regime"] = r["key"]
++            e["regime_label"] = r["label"]
++        else:
++            e["regime"] = None
++            e["regime_label"] = None
++    return dict(events=evts, mode=db.data_mode())
++
++
++@app.get("/api/regimes")
++def regimes():
++    """Zambia's USD/ZMW behaviour has shifted across distinct policy/market regimes.
++    Returns the breakpoint list so the UI can draw vertical bands and label periods.
++
++    Each regime: start (inclusive), end (exclusive or null for 'to today'), key (machine code),
++    label (UI string), narrative (one-sentence explanation)."""
++    return dict(regimes=REGIMES)
+ 
+ 
+ @app.get("/api/explain")
+diff --git a/tests/test_connectors_and_api.py b/tests/test_connectors_and_api.py
+index e632e53..165ab83 100644
+--- a/tests/test_connectors_and_api.py
++++ b/tests/test_connectors_and_api.py
+@@ -96,6 +96,35 @@ def test_model_docs_endpoint_and_pdf():
+     assert r2.content.startswith(b"%PDF")
+ 
+ 
++def test_regimes_endpoint_and_event_tagging():
++    r = client.get("/api/regimes")
++    assert r.status_code == 200
++    regimes = r.json()["regimes"]
++    keys = [reg["key"] for reg in regimes]
++    assert "pre_redenom" in keys and "pre_default" in keys
++    assert "default_no_imf" in keys and "imf_ecf" in keys
++    # Each regime has start, end (may be null), key, label, narrative
++    for reg in regimes:
++        assert all(k in reg for k in ("start", "end", "key", "label", "narrative"))
++
++    # The /api/events response tags every event with its regime (whatever events are loaded).
++    ev = client.get("/api/events").json()
++    assert ev["events"]
++    for e in ev["events"]:
++        assert "regime" in e and "regime_label" in e, f"event missing regime tag: {e}"
++        if e.get("regime"):
++            assert e["regime"] in keys, f"unknown regime {e['regime']} on event {e['title']}"
++
++    # regime_for() returns the correct regime for known breakpoints
++    from app.config import regime_for
++    assert regime_for("2019-01-15")["key"] == "pre_default"
++    assert regime_for("2020-11-13")["key"] == "default_no_imf"
++    assert regime_for("2021-06-01")["key"] == "default_no_imf"
++    assert regime_for("2022-09-01")["key"] == "imf_ecf"
++    assert regime_for("2026-01-01")["key"] == "imf_ecf"
++    assert regime_for("2005-06-01")["key"] == "pre_redenom"
++
++
+ def test_overview_and_series():
+     ov = client.get("/api/overview").json()
+     assert ov["cards"][0]["series_id"] == "USDZMW"
+-- 
+2.47.3
+

@@ -1,0 +1,239 @@
+From c34ad52c1495176309b893818743da66b0767ef6 Mon Sep 17 00:00:00 2001
+From: Zambia Treasury Insight <patch@local>
+Date: Tue, 24 Nov 2026 18:38:09 +0000
+Subject: [PATCH 09/12] Tier 2 #9: Model documentation endpoint + PDF download
+
+Adds two new endpoints:
+
+  GET /api/model-docs    -> JSON: methodology, sample range, fit summary (R^2,
+                            drivers with beta/SE/p-value), backtest metrics
+                            (MAE/RMSE/bias/dir_hit/interval_coverage/dm_t)
+                            with metric definitions, and per-series data source
+                            provenance. The validation_date is the latest obs.
+
+  GET /api/model-docs.pdf -> same content rendered as a one-page PDF using
+                             ReportLab (A4, dark-on-white tables). Returns a
+                             Content-Disposition: attachment header so the
+                             browser downloads it as zti-model-docs.pdf.
+
+reportlab is added to requirements.txt as an optional dependency (the JSON
+endpoint works without it; the PDF endpoint returns HTTP 503 with install
+instructions if reportlab is missing).
+
+The PDF is suitable for sharing with stakeholders who want the model spec,
+validation results and data sources on one printable page.
+
+74 tests passing (1 new, exercises both endpoints).
+---
+ app/main.py                      | 150 +++++++++++++++++++++++++++++++
+ requirements.txt                 |   2 +
+ tests/test_connectors_and_api.py |  22 +++++
+ 3 files changed, 174 insertions(+)
+
+diff --git a/app/main.py b/app/main.py
+index dd4d727..9949b95 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -413,6 +413,156 @@ def audit_log(limit: int = Query(100, ge=1, le=500)):
+     return dict(events=db.recent_audit_log(limit))
+ 
+ 
++@app.get("/api/model-docs")
++def model_docs(freq: str = "W-FRI", window: int | None = None):
++    """Self-contained model specification: methodology, sample range, fit summary,
++    backtest metrics, and validation date. Powers the new 'Model documentation' tab
++    and is the source of truth for the PDF download at /api/model-docs.pdf."""
++    p = _panel(freq)
++    fit = attribution.fit_driver_model(p, window=window)
++    bt = _backtest(freq, (1, 4, 8, 12), 2)
++    # The validation date is 'today' in the sense that the backtest was run against
++    # the most recent data; report the latest observation date as the anchor.
++    last_obs = max(p.levels[c].dropna().index[-1] for c in p.levels.columns
++                   if p.levels[c].notna().any())
++    return dict(
++        spec=dict(
++            target=SERIES[TARGET]["name"],
++            frequency=freq,
++            unit=SERIES[TARGET]["unit"],
++            sample_start=fit.sample_start.strftime("%Y-%m-%d"),
++            sample_end=fit.sample_end.strftime("%Y-%m-%d"),
++            n=fit.n,
++            r2=fit.r2,
++            validation_date=last_obs.strftime("%Y-%m-%d"),
++            method=("OLS with HAC (Newey-West) standard errors on weekly log-returns; "
++                    "Ridge regression blended 50/50 with a random walk for the forecast; "
++                    "empirical 5/25/75/95% quantile intervals from rolling-origin residuals."),
++            drivers=[dict(driver=d, label=GROUP_LABELS.get(d, d), beta=fit.beta(d),
++                          se=float(fit.se[d]), p_value=float(fit.pvalues[d]),
++                          series=p.used[d]) for d in fit.drivers],
++            excluded=fit.excluded,
++        ),
++        backtest=dict(
++            horizons=bt["horizons"],
++            summary=bt["summary"],
++            metric_definitions=dict(
++                MAE="Mean absolute error of the forecast vs realised values, in the target's units.",
++                RMSE="Root mean squared error; penalises large misses more than MAE.",
++                bias="Mean signed error; positive means the forecast systematically overshoots.",
++                dir_hit="Share of horizons where the forecast correctly predicted the direction of move.",
++                interval_coverage="Share of realised values that fell inside the 5-95% empirical interval.",
++                dm_t="Diebold-Mariano t-statistic vs the random-walk benchmark; positive means the model beats RW.",
++            ),
++        ),
++        data_sources={sid: dict(name=SERIES.get(sid, {}).get("name", sid),
++                                source=db.series_meta().get(sid, {}).get("source", ""),
++                                first_date=db.series_meta().get(sid, {}).get("first_date"),
++                                last_date=db.series_meta().get(sid, {}).get("last_date"),
++                                n_obs=db.series_meta().get(sid, {}).get("n_obs"))
++                      for sid in p.drivers},
++        skipped=p.skipped,
++        server_time=datetime.now(timezone.utc).isoformat(timespec="seconds"),
++    )
++
++
++@app.get("/api/model-docs.pdf")
++def model_docs_pdf(freq: str = "W-FRI", window: int | None = None):
++    """Render the model documentation as a single-page PDF. Uses ReportLab."""
++    docs = model_docs(freq=freq, window=window)
++    from io import BytesIO
++    try:
++        from reportlab.lib.pagesizes import A4
++        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
++        from reportlab.lib.units import cm
++        from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer, Table,
++                                        TableStyle, Preformatted)
++        from reportlab.lib import colors
++    except ImportError:
++        raise HTTPException(503, "PDF generation requires reportlab. Add 'reportlab>=4.0' to requirements.txt.")
++
++    buf = BytesIO()
++    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=2*cm, rightMargin=2*cm,
++                            topMargin=2*cm, bottomMargin=2*cm,
++                            title="Zambia Treasury Insight — Model Documentation")
++    styles = getSampleStyleSheet()
++    styles.add(ParagraphStyle(name="Mono", parent=styles["Code"], fontSize=7, leading=9))
++    story = []
++    story.append(Paragraph("Zambia Treasury Insight — Model Documentation", styles["Title"]))
++    story.append(Spacer(1, 0.4*cm))
++    spec = docs["spec"]
++    story.append(Paragraph(f"Target: {spec['target']}  &nbsp; Frequency: {spec['frequency']}", styles["Normal"]))
++    story.append(Paragraph(f"Sample: {spec['sample_start']} → {spec['sample_end']}  (n = {spec['n']})", styles["Normal"]))
++    story.append(Paragraph(f"Validation date: {spec['validation_date']}  &nbsp; R² = {spec['r2']:.3f}", styles["Normal"]))
++    story.append(Spacer(1, 0.3*cm))
++    story.append(Paragraph("Methodology", styles["Heading2"]))
++    story.append(Paragraph(spec["method"], styles["Normal"]))
++    story.append(Spacer(1, 0.3*cm))
++    story.append(Paragraph("Drivers (OLS with HAC standard errors)", styles["Heading2"]))
++    rows = [["Driver", "Series used", "Beta", "SE", "p-value"]]
++    for d in spec["drivers"]:
++        rows.append([d["label"], d["series"], f"{d['beta']:.3f}", f"{d['se']:.3f}", f"{d['p_value']:.3f}"])
++    t = Table(rows, colWidths=[5*cm, 4*cm, 2*cm, 2*cm, 2*cm])
++    t.setStyle(TableStyle([
++        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f3a5f")),
++        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
++        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
++        ("FONTSIZE", (0, 0), (-1, -1), 9),
++        ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
++    ]))
++    story.append(t)
++    if spec["excluded"]:
++        story.append(Spacer(1, 0.2*cm))
++        story.append(Paragraph(f"Excluded (insufficient data): {', '.join(spec['excluded'])}", styles["Normal"]))
++    story.append(Spacer(1, 0.4*cm))
++    story.append(Paragraph("Backtest (rolling origin)", styles["Heading2"]))
++    bt_rows = [["Horizon", "MAE", "RMSE", "Bias", "Dir%", "Cov%", "DM t (vs RW)"]]
++    for r in docs["backtest"]["summary"]:
++        mae = r.get("mae"); rmse = r.get("rmse"); bias = r.get("bias")
++        dh = r.get("dir_hit") or 0; cov = r.get("interval_coverage") or 0; dm = r.get("dm_t")
++        bt_rows.append([str(r["h"]),
++                        f"{mae:.3f}" if mae is not None else "—",
++                        f"{rmse:.3f}" if rmse is not None else "—",
++                        f"{bias:.3f}" if bias is not None else "—",
++                        f"{dh*100:.0f}%" if dh is not None else "—",
++                        f"{cov*100:.0f}%" if cov is not None else "—",
++                        f"{dm:.2f}" if dm is not None else "—"])
++    bt = Table(bt_rows, colWidths=[2*cm, 2*cm, 2*cm, 2*cm, 1.5*cm, 1.5*cm, 3*cm])
++    bt.setStyle(TableStyle([
++        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f3a5f")),
++        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
++        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
++        ("FONTSIZE", (0, 0), (-1, -1), 9),
++        ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
++    ]))
++    story.append(bt)
++    story.append(Spacer(1, 0.3*cm))
++    story.append(Paragraph("Metric definitions", styles["Heading3"]))
++    for name, definition in docs["backtest"]["metric_definitions"].items():
++        story.append(Paragraph(f"<b>{name}</b>: {definition}", styles["Normal"]))
++    story.append(Spacer(1, 0.4*cm))
++    story.append(Paragraph("Data sources", styles["Heading2"]))
++    src_rows = [["Series", "Source", "First", "Last", "Rows"]]
++    for sid, info in sorted(docs["data_sources"].items()):
++        src_rows.append([sid, info["source"][:50], info["first_date"] or "", info["last_date"] or "",
++                         str(info["n_obs"] or 0)])
++    st = Table(src_rows, colWidths=[3*cm, 6*cm, 2.5*cm, 2.5*cm, 1.5*cm])
++    st.setStyle(TableStyle([
++        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f3a5f")),
++        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
++        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
++        ("FONTSIZE", (0, 0), (-1, -1), 8),
++        ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
++    ]))
++    story.append(st)
++    story.append(Spacer(1, 0.4*cm))
++    story.append(Paragraph(f"Generated {docs['server_time']} (UTC).", styles["Italic"]))
++    doc.build(story)
++    pdf_bytes = buf.getvalue()
++    return Response(content=pdf_bytes, media_type="application/pdf",
++                    headers={"Content-Disposition": 'attachment; filename="zti-model-docs.pdf"'})
++
++
+ @app.get("/api/scenario/presets")
+ def presets(freq: str = "W-FRI"):
+     p = _panel(freq)
+diff --git a/requirements.txt b/requirements.txt
+index d99f527..6b4c081 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -6,3 +6,5 @@ statsmodels>=0.14
+ httpx>=0.27
+ pytest>=8.0
+ openpyxl>=3.1
++# Optional: enables /api/model-docs.pdf download. The /api/model-docs JSON endpoint works without it.
++reportlab>=4.0
+diff --git a/tests/test_connectors_and_api.py b/tests/test_connectors_and_api.py
+index 207b165..e632e53 100644
+--- a/tests/test_connectors_and_api.py
++++ b/tests/test_connectors_and_api.py
+@@ -74,6 +74,28 @@ def test_audit_log_records_state_changes():
+     assert any(e["action"] == "scenario" for e in r2.json()["events"])
+ 
+ 
++def test_model_docs_endpoint_and_pdf():
++    # The JSON endpoint returns a self-contained model specification.
++    r = client.get("/api/model-docs")
++    assert r.status_code == 200
++    body = r.json()
++    assert body["spec"]["target"] == "USD/ZMW (kwacha per US dollar)"
++    assert body["spec"]["frequency"] == "W-FRI"
++    assert body["spec"]["n"] > 0
++    assert body["spec"]["r2"] >= 0.0
++    assert isinstance(body["spec"]["drivers"], list) and body["spec"]["drivers"]
++    assert body["backtest"]["summary"]
++    assert body["backtest"]["metric_definitions"]["MAE"]
++    assert body["data_sources"]
++
++    # The PDF endpoint should return a non-empty application/pdf body (reportlab is installed).
++    r2 = client.get("/api/model-docs.pdf")
++    assert r2.status_code == 200
++    assert r2.headers["content-type"] == "application/pdf"
++    assert len(r2.content) > 5000      # a real PDF is at least several KB
++    assert r2.content.startswith(b"%PDF")
++
++
+ def test_overview_and_series():
+     ov = client.get("/api/overview").json()
+     assert ov["cards"][0]["series_id"] == "USDZMW"
+-- 
+2.47.3
+

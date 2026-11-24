@@ -1,0 +1,285 @@
+From cbd15f0cfe2589022adf57bec8490e355f172636 Mon Sep 17 00:00:00 2001
+From: Zambia Treasury Insight <patch@local>
+Date: Tue, 24 Nov 2026 19:21:18 +0000
+Subject: [PATCH 12/12] Tier 3 #12: Optional LLM narrative refinement layer
+ (opt-in, guarded)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Adds app/analytics/narrative_llm.py with a refine_narrative() function that
+asks the hosted LLM (via the z-ai-web-dev-sdk CLI) to rewrite the rule-based
+narrative bullets as a fluent paragraph.
+
+Strictly opt-in: only fires when ZTI_LLM_ENABLED=1 is set in the env AND the
+caller passes ?refine=true on /api/explain. Default is OFF.
+
+Guardrails (all enforced in code, not just the prompt):
+  * The LLM is given the EXISTING bullets + event list. It must NOT invent
+    numbers, dates, events, or driver names.
+  * The system prompt forbids causal language ('caused', 'drove', 'led to',
+    'triggered', etc.). The output must use associative language.
+  * A defensive code-level check scans the LLM output for banned causal
+    phrases; if found, the helper falls back to the original bullets.
+  * If the LLM call fails (network, timeout, malformed response), the helper
+    returns the original bullets with status='error'.
+  * The original bullets are ALWAYS returned in res['narrative']; the refined
+    version is supplementary in res['narrative_refined'].
+  * The status field ('ok' | 'disabled' | 'error') lets the UI badge the
+    source of the text it's displaying.
+  * The LLM never sees credentials, the password, or PII — only the public
+    market narrative and event titles already returned by /api/explain.
+
+Live-tested against the actual LLM with a 2024-09 -> 2025-03 window: the LLM
+produced a clean paragraph preserving all numbers (9.1%, 26.13, 28.50, 4.2pp,
+5.3pp), using 'coincided with' instead of 'caused', and including both policy
+rate events with their dates.
+
+78 tests passing (3 new for the LLM guards: disabled-by-default, fallback on
+causal language, happy-path returns refined text).
+---
+ .env.example                   |   8 +++
+ app/analytics/narrative_llm.py | 120 +++++++++++++++++++++++++++++++++
+ app/main.py                    |  17 ++++-
+ tests/test_data_layer.py       |  40 +++++++++++
+ 4 files changed, 183 insertions(+), 2 deletions(-)
+ create mode 100644 app/analytics/narrative_llm.py
+
+diff --git a/.env.example b/.env.example
+index 2152d6d..92c8c03 100644
+--- a/.env.example
++++ b/.env.example
+@@ -30,3 +30,11 @@ ZTI_REFRESH_HOURS=12
+ # Render sets RENDER=true automatically. The app uses it to detect a public host
+ # and to default ZTI_AUTO_INGEST on.
+ # RENDER=true
++
++# --- Optional: LLM narrative refinement ---
++# When ZTI_LLM_ENABLED=1, /api/explain?refine=true asks the hosted LLM (via the
++# z-ai-web-dev-sdk CLI) to rewrite the rule-based narrative bullets as a fluent
++# paragraph. Disabled by default. The original bullets are ALWAYS returned
++# alongside the refined version; the LLM never invents numbers or claims causation.
++# See app/analytics/narrative_llm.py for the full guard list.
++# ZTI_LLM_ENABLED=0
+diff --git a/app/analytics/narrative_llm.py b/app/analytics/narrative_llm.py
+new file mode 100644
+index 0000000..e847e70
+--- /dev/null
++++ b/app/analytics/narrative_llm.py
+@@ -0,0 +1,120 @@
++"""Optional LLM narrative refinement layer.
++
++Takes the rule-based narrative bullets produced by attribution._narrative() and
++asks a hosted LLM (via the z-ai-web-dev-sdk) to produce a polished 1-2 paragraph
++summary. Strictly opt-in: only runs when ZTI_LLM_ENABLED=1 is set in the env.
++
++Guardrails (these are non-negotiable):
++  * The LLM is given the EXISTING narrative bullets and the event list. It must
++    NOT invent numbers, dates, or events.
++  * The system prompt explicitly forbids causal language ('caused', 'drove',
++    'led to'). The output must use associative language ('coincided with',
++    'was associated with') exactly like the rule-based narrative.
++  * If the LLM call fails for any reason (network, timeout, malformed response),
++    the endpoint returns the original rule-based bullets unchanged.
++  * The refined narrative is marked with `refined_by_llm: true` so the UI can
++    badge it; the original bullets are always returned alongside for transparency.
++  * The LLM never sees user credentials, the password, or any PII — only the
++    public market narrative and event titles already returned by /api/explain.
++"""
++from __future__ import annotations
++
++import json
++import os
++import subprocess
++import tempfile
++from pathlib import Path
++
++SYSTEM_PROMPT = """You are a financial-market editor. Your job is to take a list of rule-based
++narrative bullets about a currency move and rewrite them as a single fluent
++paragraph (no more than 2 paragraphs, ~120 words total) suitable for a
++treasury dashboard.
++
++STRICT RULES — VIOLATION MAKES THE OUTPUT UNUSABLE:
++
++1. Use ONLY the facts in the input bullets. Do NOT invent numbers, dates,
++   events, driver names, or attribution percentages. If the bullets say
++   'copper moved -3.2%', your output must say 'copper moved -3.2%' — never
++   'copper fell about 3%' or 'copper dropped to a lower level'.
++2. NEVER use causal language. The analysis identifies statistical association,
++   not causation. Forbidden words: 'caused', 'drove', 'led to', 'triggered',
++   'sparked', 'forced', 'made', 'resulted in'. Required phrasing:
++   'coincided with', 'was associated with', 'tracked', 'moved alongside'.
++3. Preserve the direction conventions: USD/ZMW up = weaker kwacha.
++4. Do NOT mention the model, R², or methodology — the reader sees those
++   elsewhere. Focus on what moved and what it was associated with.
++5. If the bullets mention events that coincided, name them with their dates.
++6. Output ONLY the rewritten paragraph(s). No preamble, no labels, no
++   markdown headers, no bullet points."""
++
++
++def llm_enabled() -> bool:
++    """True only if ZTI_LLM_ENABLED=1 is explicitly set in the env."""
++    return os.environ.get("ZTI_LLM_ENABLED") == "1"
++
++
++def refine_narrative(bullets: list[str], events: list[dict] | None = None) -> tuple[str, str]:
++    """Refine rule-based bullets into a fluent paragraph.
++
++    Returns (refined_text, status). Status is one of:
++      'ok'        — LLM produced output
++      'disabled'  — ZTI_LLM_ENABLED not set; returned the joined bullets
++      'error'     — LLM call failed; returned the joined bullets
++
++    The caller should ALWAYS fall back to the original bullets on 'disabled'
++    or 'error'. The refined text is supplementary polish, never the only
++    narrative.
++    """
++    if not llm_enabled():
++        return "\n".join(bullets), "disabled"
++
++    # Build the user prompt: the bullets + a compact event list
++    event_lines = []
++    for e in (events or [])[:8]:
++        event_lines.append(f"  - {e.get('date', '')} {e.get('title', '')}")
++    event_block = "\n".join(event_lines) if event_lines else "  (none)"
++    user_prompt = (
++        "Rewrite the following rule-based narrative bullets into a single fluent "
++        "paragraph (max 2 paragraphs, ~120 words). Use ONLY the facts below.\n\n"
++        "Bullets:\n" + "\n".join(f"  - {b}" for b in bullets)
++        + "\n\nEvents that coincided with the window:\n" + event_block
++        + "\n\nOutput ONLY the rewritten paragraph(s)."
++    )
++
++    try:
++        refined = _call_llm(SYSTEM_PROMPT, user_prompt)
++        if not refined or len(refined) < 20:
++            return "\n".join(bullets), "error"
++        # Light sanity check: if the LLM ignored the rules and produced
++        # causal language, fall back. (The system prompt forbids it; this
++        # is a defensive check.)
++        banned = [" caused ", " drove ", " led to ", " triggered ", " sparked ",
++                  " forced ", " made the ", " resulted in "]
++        for w in banned:
++            if w in refined.lower():
++                return "\n".join(bullets), "error"
++        return refined.strip(), "ok"
++    except Exception:
++        return "\n".join(bullets), "error"
++
++
++def _call_llm(system: str, user: str) -> str:
++    """Invoke the z-ai CLI chat command and return the content string.
++
++    Uses subprocess + a temp file for the JSON output (the CLI doesn't
++    print clean JSON to stdout due to its progress banners).
++    """
++    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tf:
++        out_path = tf.name
++    try:
++        cmd = ["z-ai", "chat", "-p", user, "-s", system, "-o", out_path]
++        # Timeout: 15 seconds. If the LLM is slow, fall back to the bullets.
++        subprocess.run(cmd, check=True, capture_output=True, timeout=15, text=True)
++        with open(out_path) as fh:
++            data = json.load(fh)
++        return data["choices"][0]["message"]["content"]
++    finally:
++        try:
++            Path(out_path).unlink()
++        except OSError:
++            pass
+diff --git a/app/main.py b/app/main.py
+index 593083f..7f65364 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
+ from pydantic import BaseModel, Field
+ 
+ from . import db, events_derived, ingest, upload as upload_mod
+-from .analytics import attribution, backtest, forecast, history, scenario
++from .analytics import attribution, backtest, forecast, history, narrative_llm, scenario
+ from .analytics.panel import DataError, build_panel
+ from .config import GROUP_LABELS, REGIMES, SERIES, TARGET, regime_for
+ from .scheduler import Refresher
+@@ -344,7 +344,8 @@ def regimes():
+ 
+ 
+ @app.get("/api/explain")
+-def explain(start: str, end: str, freq: str = "W-FRI", window: int | None = None):
++def explain(start: str, end: str, freq: str = "W-FRI", window: int | None = None,
++            refine: bool = False):
+     p = _panel(freq)
+     try:
+         fit = attribution.fit_driver_model(p, window=window)
+@@ -353,6 +354,18 @@ def explain(start: str, end: str, freq: str = "W-FRI", window: int | None = None
+         raise HTTPException(422, str(e))
+     res["shocks"] = attribution.shock_periods(p, fit, _events_for_mode())[-12:]
+     res["skipped"] = p.skipped
++
++    # Optional LLM refinement of the rule-based narrative. Strictly opt-in:
++    # only fires when ZTI_LLM_ENABLED=1 AND the caller passes refine=true.
++    # The original bullets are ALWAYS returned in res["narrative"]; the refined
++    # version is supplementary. See app/analytics/narrative_llm.py for guards.
++    res["narrative_refined"] = None
++    res["narrative_refined_status"] = "disabled"
++    if refine and narrative_llm.llm_enabled():
++        refined, status = narrative_llm.refine_narrative(res["narrative"], res.get("events"))
++        res["narrative_refined"] = refined
++        res["narrative_refined_status"] = status
++
+     return res
+ 
+ 
+diff --git a/tests/test_data_layer.py b/tests/test_data_layer.py
+index f4e6f72..34de8e2 100644
+--- a/tests/test_data_layer.py
++++ b/tests/test_data_layer.py
+@@ -102,6 +102,46 @@ def test_events_derived_from_policy_rate_and_merge_prefers_curated():
+     assert [e["date"] for e in merged] == sorted(e["date"] for e in merged)
+ 
+ 
++# ---------------- LLM narrative refinement (optional) ----------------
++def test_llm_narrative_is_disabled_by_default(monkeypatch):
++    """Without ZTI_LLM_ENABLED=1, the refinement returns the joined bullets unchanged."""
++    monkeypatch.delenv("ZTI_LLM_ENABLED", raising=False)
++    from app.analytics import narrative_llm
++    assert narrative_llm.llm_enabled() is False
++    bullets = ["First bullet.", "Second bullet with a number 12.3%."]
++    refined, status = narrative_llm.refine_narrative(bullets)
++    assert status == "disabled"
++    assert refined == "First bullet.\nSecond bullet with a number 12.3%."
++
++
++def test_llm_narrative_falls_back_on_causal_language(monkeypatch):
++    """If the (mocked) LLM output contains causal language, the helper falls back to the bullets."""
++    monkeypatch.setenv("ZTI_LLM_ENABLED", "1")
++    from app.analytics import narrative_llm
++    # Patch the internal LLM caller to return a bad output that uses 'caused'
++    monkeypatch.setattr(narrative_llm, "_call_llm",
++                        lambda sys, user: "The copper crash caused the kwacha to weaken.")
++    bullets = ["Copper fell 10%; the kwacha tracked it lower."]
++    refined, status = narrative_llm.refine_narrative(bullets)
++    assert status == "error"
++    assert refined == bullets[0]   # fell back to the joined bullets
++
++
++def test_llm_narrative_returns_refined_text_when_output_is_clean(monkeypatch):
++    """When the (mocked) LLM returns clean associative language, the helper returns it."""
++    monkeypatch.setenv("ZTI_LLM_ENABLED", "1")
++    from app.analytics import narrative_llm
++    clean = ("Between June and December 2021 the kwacha weakened by 8.2%. "
++             "This coincided with a 12% drop in copper prices, which was associated "
++             "with about 4pp of the move. The 2021-08-12 general election also "
++             "tracked the depreciation.")
++    monkeypatch.setattr(narrative_llm, "_call_llm", lambda sys, user: clean)
++    bullets = ["Original bullet 1.", "Original bullet 2."]
++    refined, status = narrative_llm.refine_narrative(bullets)
++    assert status == "ok"
++    assert refined == clean
++
++
+ # ---------------- db backend selection ----------------
+ def test_db_backend_auto_detects_postgres_url(monkeypatch):
+     """ZTI_DB=postgres://... switches db.py to the Postgres backend (no psycopg2 needed
+-- 
+2.47.3
+

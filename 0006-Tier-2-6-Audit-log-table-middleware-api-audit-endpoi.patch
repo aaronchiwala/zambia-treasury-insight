@@ -1,0 +1,246 @@
+From e7d211d1bf807dd439a0ea376904da9cf96daf93 Mon Sep 17 00:00:00 2001
+From: Zambia Treasury Insight <patch@local>
+Date: Tue, 24 Nov 2026 18:26:39 +0000
+Subject: [PATCH 06/12] Tier 2 #6: Audit log table + middleware + /api/audit
+ endpoint
+
+Adds an audit_log table (id, at, action, method, path, user, source_ip, params,
+status_code, detail) and instruments the four state-changing API calls:
+
+  POST /api/refresh    - background ingest trigger (records start / already-running)
+  POST /api/demo       - synthetic data load (records refusal if real data exists)
+  POST /api/upload     - CSV/XLSX upload (records series_id, filename, rows, replace, status)
+  POST /api/scenario   - scenario computation (records shocks, horizon, status)
+
+GET /api/audit exposes the most recent N (default 100, max 500) entries. This
+endpoint is exempted from Basic Auth alongside /api/health and /api/security,
+since audit data is operational metadata, not market data.
+
+The middleware now opens three paths: /api/health (Render checks), /api/security
+(auth posture), /api/audit (operator review). All others still require auth when
+ZTI_PASSWORD is set.
+
+72 tests passing (1 new).
+---
+ app/db.py                        | 36 +++++++++++++++++++
+ app/main.py                      | 61 ++++++++++++++++++++++++++++----
+ tests/test_connectors_and_api.py | 15 ++++++++
+ 3 files changed, 105 insertions(+), 7 deletions(-)
+
+diff --git a/app/db.py b/app/db.py
+index 7cc4645..d9f5475 100644
+--- a/app/db.py
++++ b/app/db.py
+@@ -27,6 +27,18 @@ CREATE TABLE IF NOT EXISTS ingest_log(
+   id INTEGER PRIMARY KEY AUTOINCREMENT, series_id TEXT, run_at TEXT,
+   rows INTEGER, status TEXT, message TEXT
+ );
++CREATE TABLE IF NOT EXISTS audit_log(
++  id INTEGER PRIMARY KEY AUTOINCREMENT,
++  at TEXT NOT NULL,
++  action TEXT NOT NULL,
++  method TEXT,
++  path TEXT,
++  user TEXT,
++  source_ip TEXT,
++  params TEXT,
++  status_code INTEGER,
++  detail TEXT
++);
+ """
+ 
+ 
+@@ -132,6 +144,30 @@ def recent_ingest_log(limit: int = 30) -> list[dict]:
+         return [dict(r) for r in con.execute("SELECT * FROM ingest_log ORDER BY id DESC LIMIT ?", (limit,))]
+ 
+ 
++def audit(action: str, *, method: str = "", path: str = "", user: str | None = None,
++          source_ip: str | None = None, params: str = "", status_code: int | None = None,
++          detail: str = "") -> None:
++    """Append a row to the audit log. Safe to call from any request handler.
++
++    The audit_log table records every state-changing API call (refresh, demo, upload,
++    scenario post, etc.) so an operator can answer 'who changed what, when?'.
++    """
++    with connect() as con:
++        con.execute(
++            "INSERT INTO audit_log(at, action, method, path, user, source_ip, params, status_code, detail) "
++            "VALUES (?,?,?,?,?,?,?,?,?)",
++            (_now(), action[:80], method[:10], path[:240], (user or "")[:60],
++             (source_ip or "")[:60], params[:500], status_code, detail[:500]),
++        )
++
++
++def recent_audit_log(limit: int = 100) -> list[dict]:
++    with connect() as con:
++        return [dict(r) for r in con.execute(
++            "SELECT id, at, action, method, path, user, source_ip, params, status_code, detail "
++            "FROM audit_log ORDER BY id DESC LIMIT ?", (limit,))]
++
++
+ def latest_problems(limit: int = 80) -> list[dict]:
+     """Most recent log entry per series/source, kept only if it is an error or a warning."""
+     seen, out = set(), []
+diff --git a/app/main.py b/app/main.py
+index 445b0ed..dd4d727 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -69,10 +69,11 @@ app = FastAPI(title="Zambia Treasury Insight", version="0.2.0", lifespan=lifespa
+ 
+ @app.middleware("http")
+ async def optional_basic_auth(request, call_next):
+-    """If ZTI_PASSWORD is set, every route except /api/health and /api/security needs HTTP Basic credentials.
+-    /api/security stays open so an operator can verify the auth posture without authenticating."""
++    """If ZTI_PASSWORD is set, every route except /api/health, /api/security and /api/audit needs HTTP Basic credentials.
++    /api/security and /api/audit stay open: operational metadata, not market data."""
+     password = os.environ.get("ZTI_PASSWORD")
+-    if not password or request.url.path in ("/api/health", "/api/security"):
++    OPEN = {"/api/health", "/api/security", "/api/audit"}
++    if not password or request.url.path in OPEN:
+         return await call_next(request)
+     user = os.environ.get("ZTI_USER", "treasury")
+     ok = False
+@@ -190,23 +191,35 @@ def _require_controls() -> None:
+ 
+ 
+ @app.post("/api/refresh")
+-def refresh_now():
++def refresh_now(request: Request):
+     """Re-run the live data load in the background (same as the automatic refresh)."""
+     if refresher.state.get("running"):
++        db.audit("refresh", method="POST", path="/api/refresh",
++                 source_ip=request.client.host if request.client else None,
++                 status_code=200, detail="already running; no-op")
+         return dict(started=False, running=True)
+     threading.Thread(target=refresher.run_once, name="zti-refresh-now", daemon=True).start()
++    db.audit("refresh", method="POST", path="/api/refresh",
++             source_ip=request.client.host if request.client else None,
++             status_code=200, detail="started background ingest")
+     return dict(started=True, running=False)
+ 
+ 
+ @app.post("/api/demo")
+-def load_demo():
++def load_demo(request: Request):
+     """One-click synthetic data so the app can be explored. Refused once real USD/ZMW data exists."""
+     meta = db.series_meta().get(TARGET)
+     if meta and not meta["is_demo"]:
++        db.audit("demo", method="POST", path="/api/demo",
++                 source_ip=request.client.host if request.client else None,
++                 status_code=409, detail="refused: real USD/ZMW data already loaded")
+         raise HTTPException(409, "Real USD/ZMW data is already loaded; demo data would only confuse it.")
+     from . import demo_data
+     out = demo_data.load()
+     _cache.clear()
++    db.audit("demo", method="POST", path="/api/demo",
++             source_ip=request.client.host if request.client else None,
++             status_code=200, detail=str(out))
+     return dict(ok=True, detail=str(out))
+ 
+ 
+@@ -219,11 +232,19 @@ async def upload_series(request: Request, series_id: str, filename: str = "", va
+     discards what was there. The data passes the same quality gate as automatic feeds."""
+     _require_controls()
+     if series_id not in SERIES:
++        db.audit("upload", method="POST", path="/api/upload",
++                 source_ip=request.client.host if request.client else None,
++                 params=f"series_id={series_id}", status_code=404,
++                 detail=f"unknown series {series_id!r}")
+         raise HTTPException(404, f"Unknown series {series_id!r}. Known: {', '.join(SERIES)}")
+     try:
+         hint = ("usd",) if series_id == "USDZMW" else ()      # multi-currency tables: take the dollar column
+         new, info = upload_mod.parse_upload(await request.body(), filename, value_col, prefer=hint)
+     except upload_mod.UploadError as e:
++        db.audit("upload", method="POST", path="/api/upload",
++                 source_ip=request.client.host if request.client else None,
++                 params=f"series_id={series_id}&filename={filename}",
++                 status_code=422, detail=str(e))
+         raise HTTPException(422, str(e))
+     meta = db.series_meta().get(series_id)
+     if meta and not meta["is_demo"] and not replace:
+@@ -233,6 +254,10 @@ async def upload_series(request: Request, series_id: str, filename: str = "", va
+     cleaned, issues = validate_series(series_id, new)
+     status, msg = summarize(issues)
+     if cleaned is None:
++        db.audit("upload", method="POST", path="/api/upload",
++                 source_ip=request.client.host if request.client else None,
++                 params=f"series_id={series_id}&filename={filename}",
++                 status_code=422, detail=msg or "rejected by quality gate")
+         raise HTTPException(422, msg or "data rejected by the quality checks")
+     m = SERIES[series_id]
+     db.clear_demo()
+@@ -240,6 +265,10 @@ async def upload_series(request: Request, series_id: str, filename: str = "", va
+                          source=f"upload: {filename or 'file'}", is_demo=False,
+                          notes=f"Uploaded by a user; value column {info['value_column']!r}.")
+     db.log_ingest(series_id, n, status, msg or f"uploaded {info['rows']} rows from {filename or 'file'}")
++    db.audit("upload", method="POST", path="/api/upload",
++             source_ip=request.client.host if request.client else None,
++             params=f"series_id={series_id}&filename={filename}&rows={info['rows']}&replace={replace}",
++             status_code=200, detail=f"stored {n} rows; {status}")
+     if not db.load_events(is_demo=False):
+         ingest.load_events()
+     _cache.clear()
+@@ -358,14 +387,32 @@ class ScenarioIn(BaseModel):
+ 
+ 
+ @app.post("/api/scenario")
+-def post_scenario(body: ScenarioIn):
++def post_scenario(body: ScenarioIn, request: Request):
+     p = _panel(body.freq)
+     try:
+-        return scenario.run_scenario(p, body.shocks, body.horizon, body.window)
++        result = scenario.run_scenario(p, body.shocks, body.horizon, body.window)
++        db.audit("scenario", method="POST", path="/api/scenario",
++                 source_ip=request.client.host if request.client else None,
++                 params=f"freq={body.freq}&h={body.horizon}&window={body.window}&shocks={list(body.shocks.keys())}",
++                 status_code=200, detail=f"computed scenario over {body.horizon} weeks")
++        return result
+     except ValueError as e:
++        db.audit("scenario", method="POST", path="/api/scenario",
++                 source_ip=request.client.host if request.client else None,
++                 params=f"freq={body.freq}&h={body.horizon}&window={body.window}",
++                 status_code=422, detail=str(e))
+         raise HTTPException(422, str(e))
+ 
+ 
++@app.get("/api/audit")
++def audit_log(limit: int = Query(100, ge=1, le=500)):
++    """Most recent state-changing API calls. Use this to answer 'who changed what, when?'.
++
++    Records refreshes, demo loads, uploads and scenario posts. Read-only: the operator
++    can review without authentication (the data is operational metadata, not market data)."""
++    return dict(events=db.recent_audit_log(limit))
++
++
+ @app.get("/api/scenario/presets")
+ def presets(freq: str = "W-FRI"):
+     p = _panel(freq)
+diff --git a/tests/test_connectors_and_api.py b/tests/test_connectors_and_api.py
+index eae5151..207b165 100644
+--- a/tests/test_connectors_and_api.py
++++ b/tests/test_connectors_and_api.py
+@@ -59,6 +59,21 @@ def test_security_endpoint_reports_auth_posture():
+     assert "password" not in body
+ 
+ 
++def test_audit_log_records_state_changes():
++    # A scenario POST should land in the audit log with action, status_code and source_ip.
++    # Runs against the demo DB (loaded by the session fixture); audit writes do not pollute market data.
++    from app import db as _db
++    body = {"shocks": {"COPPER": -10.0}, "horizon": 4, "window": 156, "freq": "W-FRI"}
++    r = client.post("/api/scenario", json=body)
++    assert r.status_code == 200
++    log = _db.recent_audit_log(limit=10)
++    assert any(e["action"] == "scenario" and e["status_code"] == 200 for e in log), log
++    # The /api/audit endpoint exposes the same log publicly
++    r2 = client.get("/api/audit")
++    assert r2.status_code == 200
++    assert any(e["action"] == "scenario" for e in r2.json()["events"])
++
++
+ def test_overview_and_series():
+     ov = client.get("/api/overview").json()
+     assert ov["cards"][0]["series_id"] == "USDZMW"
+-- 
+2.47.3
+

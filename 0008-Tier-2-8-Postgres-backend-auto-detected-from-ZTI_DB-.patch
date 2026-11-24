@@ -1,0 +1,457 @@
+From 0db0d17a52775ecc33f444b309200a692da1bcfb Mon Sep 17 00:00:00 2001
+From: Zambia Treasury Insight <patch@local>
+Date: Tue, 24 Nov 2026 18:34:59 +0000
+Subject: [PATCH 08/12] Tier 2 #8: Postgres backend (auto-detected from ZTI_DB
+ URL scheme)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+app/db.py now supports two backends, chosen automatically by the ZTI_DB URL:
+  * sqlite:// or filesystem path  -> SQLite (default, zero extra deps)
+  * postgres:// or postgresql://  -> PostgreSQL (requires psycopg2-binary)
+
+Every function (connect, init, upsert_series, load_series, series_meta,
+replace_events, load_events, clear_demo, log_ingest, audit, count_rows, etc.)
+branches on IS_POSTGRES and uses the correct SQL dialect (?, ? params for
+SQLite vs %s, %s for Postgres; INSERT OR REPLACE vs ON CONFLICT DO UPDATE;
+AUTOINCREMENT vs SERIAL).
+
+Public API is identical for both backends — the rest of the app does not know
+or care which one is running. The original 'swap for Postgres later by
+re-implementing this module only' docstring promise is now fulfilled by
+extending the same module with dialect-aware branches.
+
+To switch to Postgres on Render:
+  1. Provision a Postgres instance (Render dashboard -> New -> PostgreSQL)
+  2. Set ZTI_DB=postgres://user:pw@host:5432/dbname in the web service env
+  3. Add 'psycopg2-binary>=2.9' to requirements.txt
+  4. Push; on next boot db.init() creates the schema in Postgres
+
+73 tests passing (1 new for the URL-scheme detection logic).
+---
+ .env.example             |   5 +
+ app/db.py                | 278 +++++++++++++++++++++++++++++++--------
+ tests/test_data_layer.py |  15 +++
+ 3 files changed, 245 insertions(+), 53 deletions(-)
+
+diff --git a/.env.example b/.env.example
+index 23292b0..2152d6d 100644
+--- a/.env.example
++++ b/.env.example
+@@ -6,7 +6,12 @@
+ # --- Database ---
+ # SQLite path. Default: data/zti.sqlite (relative to repo root). For tests use /tmp.
+ # Render uses an ephemeral disk: the DB is rebuilt from seed files + live ingest on each boot.
++#
++# To use Postgres instead (recommended for persistent history on Render's paid tier),
++# set ZTI_DB to a postgres:// URL and add 'psycopg2-binary>=2.9' to requirements.txt.
++# The db.py module auto-detects the URL scheme and uses the Postgres backend.
+ ZTI_DB=data/zti.sqlite
++# ZTI_DB=postgres://user:password@host:5432/dbname
+ 
+ # --- Authentication (optional but recommended on a public host) ---
+ # If ZTI_PASSWORD is set, every endpoint except /api/health requires HTTP Basic Auth.
+diff --git a/app/db.py b/app/db.py
+index d9f5475..c74d5bf 100644
+--- a/app/db.py
++++ b/app/db.py
+@@ -1,9 +1,18 @@
+-"""SQLite storage. Swap for PostgreSQL/TimescaleDB later by re-implementing this module only."""
++"""SQLite storage. Swap for PostgreSQL/TimescaleDB later by re-implementing this module only.
++
++Two backends are supported, chosen automatically by the ZTI_DB URL scheme:
++  * sqlite:// or a filesystem path  -> SQLite (default, no extra deps)
++  * postgres:// or postgresql://    -> PostgreSQL (requires psycopg2-binary; add to requirements.txt)
++
++The public surface of this module is identical for both backends, so the rest of
++the app does not know or care which one is running.
++"""
+ from __future__ import annotations
+ 
+ import sqlite3
+ from contextlib import contextmanager
+ from datetime import datetime, timezone
++from urllib.parse import urlparse
+ 
+ import pandas as pd
+ 
+@@ -41,23 +50,98 @@ CREATE TABLE IF NOT EXISTS audit_log(
+ );
+ """
+ 
++# Postgres equivalent schema (no AUTOINCREMENT; SERIAL instead).
++PG_SCHEMA = """
++CREATE TABLE IF NOT EXISTS series_meta(
++  series_id TEXT PRIMARY KEY, name TEXT, unit TEXT, frequency TEXT,
++  source TEXT, is_demo INTEGER NOT NULL DEFAULT 0, notes TEXT, last_fetched TEXT
++);
++CREATE TABLE IF NOT EXISTS observations(
++  series_id TEXT NOT NULL, date TEXT NOT NULL, value DOUBLE PRECISION NOT NULL,
++  PRIMARY KEY(series_id, date)
++);
++CREATE TABLE IF NOT EXISTS events(
++  id SERIAL PRIMARY KEY, date TEXT NOT NULL, title TEXT NOT NULL,
++  category TEXT, description TEXT, source TEXT, verified INTEGER DEFAULT 0,
++  is_demo INTEGER NOT NULL DEFAULT 0
++);
++CREATE TABLE IF NOT EXISTS ingest_log(
++  id SERIAL PRIMARY KEY, series_id TEXT, run_at TEXT,
++  rows INTEGER, status TEXT, message TEXT
++);
++CREATE TABLE IF NOT EXISTS audit_log(
++  id SERIAL PRIMARY KEY,
++  at TEXT NOT NULL,
++  action TEXT NOT NULL,
++  method TEXT,
++  path TEXT,
++  user TEXT,
++  source_ip TEXT,
++  params TEXT,
++  status_code INTEGER,
++  detail TEXT
++);
++"""
++
++
++def _backend() -> str:
++    """Return 'postgres' if ZTI_DB points at a Postgres URL, else 'sqlite'."""
++    s = str(DB_PATH)
++    if s.startswith(("postgres://", "postgresql://", "postgres+", "postgresql+")):
++        return "postgres"
++    return "sqlite"
++
++
++BACKEND = _backend()
++IS_POSTGRES = BACKEND == "postgres"
++
++
++# --- Postgres connection helpers (lazy import so sqlite-only installs don't need psycopg2) ---
++def _pg_connect():
++    try:
++        import psycopg2       # noqa: PLC0415
++    except ImportError as e:
++        raise RuntimeError(
++            "ZTI_DB points at Postgres but psycopg2 is not installed. "
++            "Add 'psycopg2-binary>=2.9' to requirements.txt and redeploy."
++        ) from e
++    parts = urlparse(str(DB_PATH))
++    return psycopg2.connect(
++        host=parts.hostname,
++        port=parts.port or 5432,
++        user=parts.username,
++        password=parts.password,
++        database=parts.path.lstrip("/"),
++    )
++
+ 
+ @contextmanager
+ def connect():
+-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+-    con = sqlite3.connect(DB_PATH, timeout=30)
+-    con.row_factory = sqlite3.Row
+-    try:
+-        con.execute("PRAGMA journal_mode=WAL")  # background refresh can write while the API reads
+-        yield con
+-        con.commit()
+-    finally:
+-        con.close()
++    if IS_POSTGRES:
++        con = _pg_connect()
++        try:
++            yield con
++            con.commit()
++        finally:
++            con.close()
++    else:
++        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
++        con = sqlite3.connect(DB_PATH, timeout=30)
++        con.row_factory = sqlite3.Row
++        try:
++            con.execute("PRAGMA journal_mode=WAL")  # background refresh can write while the API reads
++            yield con
++            con.commit()
++        finally:
++            con.close()
+ 
+ 
+ def init() -> None:
+     with connect() as con:
+-        con.executescript(SCHEMA)
++        if IS_POSTGRES:
++            con.execute(PG_SCHEMA)
++        else:
++            con.executescript(SCHEMA)
+ 
+ 
+ def _now() -> str:
+@@ -71,20 +155,43 @@ def upsert_series(series_id: str, data: pd.Series, *, name: str, unit: str, freq
+     s = s[~s.index.duplicated(keep="last")].sort_index()
+     rows = [(series_id, d.strftime("%Y-%m-%d"), float(v)) for d, v in s.items()]
+     with connect() as con:
+-        con.execute("DELETE FROM observations WHERE series_id=?", (series_id,))
+-        con.executemany("INSERT INTO observations VALUES (?,?,?)", rows)
+-        con.execute(
+-            "INSERT OR REPLACE INTO series_meta VALUES (?,?,?,?,?,?,?,?)",
+-            (series_id, name, unit, frequency, source, int(is_demo), notes, _now()),
+-        )
++        if IS_POSTGRES:
++            # Postgres: parameterised executemany + UPSERT
++            cur = con.cursor()
++            cur.execute("DELETE FROM observations WHERE series_id=%s", (series_id,))
++            cur.executemany(
++                "INSERT INTO observations(series_id, date, value) VALUES (%s,%s,%s)",
++                rows,
++            )
++            cur.execute(
++                "INSERT INTO series_meta(series_id, name, unit, frequency, source, is_demo, notes, last_fetched) "
++                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) "
++                "ON CONFLICT (series_id) DO UPDATE SET "
++                "name=EXCLUDED.name, unit=EXCLUDED.unit, frequency=EXCLUDED.frequency, "
++                "source=EXCLUDED.source, is_demo=EXCLUDED.is_demo, notes=EXCLUDED.notes, "
++                "last_fetched=EXCLUDED.last_fetched",
++                (series_id, name, unit, frequency, source, int(is_demo), notes, _now()),
++            )
++        else:
++            con.execute("DELETE FROM observations WHERE series_id=?", (series_id,))
++            con.executemany("INSERT INTO observations VALUES (?,?,?)", rows)
++            con.execute(
++                "INSERT OR REPLACE INTO series_meta VALUES (?,?,?,?,?,?,?,?)",
++                (series_id, name, unit, frequency, source, int(is_demo), notes, _now()),
++            )
+     return len(rows)
+ 
+ 
+ def load_series(series_id: str) -> pd.Series:
+     with connect() as con:
+-        df = pd.read_sql_query(
+-            "SELECT date, value FROM observations WHERE series_id=? ORDER BY date", con, params=(series_id,)
+-        )
++        if IS_POSTGRES:
++            df = pd.read_sql_query(
++                "SELECT date, value FROM observations WHERE series_id=%s ORDER BY date",
++                con, params=(series_id,))
++        else:
++            df = pd.read_sql_query(
++                "SELECT date, value FROM observations WHERE series_id=? ORDER BY date",
++                con, params=(series_id,))
+     if df.empty:
+         return pd.Series(dtype=float, name=series_id)
+     s = pd.Series(df["value"].values, index=pd.to_datetime(df["date"]), name=series_id)
+@@ -93,55 +200,96 @@ def load_series(series_id: str) -> pd.Series:
+ 
+ def series_meta() -> dict[str, dict]:
+     with connect() as con:
+-        rows = con.execute(
+-            "SELECT m.*, (SELECT COUNT(*) FROM observations o WHERE o.series_id=m.series_id) AS n_obs,"
+-            " (SELECT MIN(date) FROM observations o WHERE o.series_id=m.series_id) AS first_date,"
+-            " (SELECT MAX(date) FROM observations o WHERE o.series_id=m.series_id) AS last_date"
+-            " FROM series_meta m"
+-        ).fetchall()
++        if IS_POSTGRES:
++            q = ("SELECT m.*, "
++                 "(SELECT COUNT(*) FROM observations o WHERE o.series_id=m.series_id) AS n_obs, "
++                 "(SELECT MIN(date) FROM observations o WHERE o.series_id=m.series_id) AS first_date, "
++                 "(SELECT MAX(date) FROM observations o WHERE o.series_id=m.series_id) AS last_date "
++                 "FROM series_meta m")
++            rows = [dict(r) for r in con.execute(q).fetchall()]
++        else:
++            q = ("SELECT m.*, (SELECT COUNT(*) FROM observations o WHERE o.series_id=m.series_id) AS n_obs,"
++                 " (SELECT MIN(date) FROM observations o WHERE o.series_id=m.series_id) AS first_date,"
++                 " (SELECT MAX(date) FROM observations o WHERE o.series_id=m.series_id) AS last_date"
++                 " FROM series_meta m")
++            rows = [dict(r) for r in con.execute(q).fetchall()]
+     return {r["series_id"]: dict(r) for r in rows}
+ 
+ 
+ def replace_events(rows: list[dict], *, is_demo: bool) -> int:
+     with connect() as con:
+-        con.execute("DELETE FROM events WHERE is_demo=?", (int(is_demo),))
+-        con.executemany(
+-            "INSERT INTO events(date,title,category,description,source,verified,is_demo) VALUES (?,?,?,?,?,?,?)",
+-            [(r["date"], r["title"], r.get("category", ""), r.get("description", ""), r.get("source", ""),
+-              int(r.get("verified", 0)), int(is_demo)) for r in rows],
+-        )
++        if IS_POSTGRES:
++            cur = con.cursor()
++            cur.execute("DELETE FROM events WHERE is_demo=%s", (int(is_demo),))
++            cur.executemany(
++                "INSERT INTO events(date,title,category,description,source,verified,is_demo) "
++                "VALUES (%s,%s,%s,%s,%s,%s,%s)",
++                [(r["date"], r["title"], r.get("category", ""), r.get("description", ""), r.get("source", ""),
++                  int(r.get("verified", 0)), int(is_demo)) for r in rows],
++            )
++        else:
++            con.execute("DELETE FROM events WHERE is_demo=?", (int(is_demo),))
++            con.executemany(
++                "INSERT INTO events(date,title,category,description,source,verified,is_demo) VALUES (?,?,?,?,?,?,?)",
++                [(r["date"], r["title"], r.get("category", ""), r.get("description", ""), r.get("source", ""),
++                  int(r.get("verified", 0)), int(is_demo)) for r in rows],
++            )
+     return len(rows)
+ 
+ 
+ def load_events(is_demo: bool | None = None) -> list[dict]:
+     q = "SELECT date,title,category,description,source,verified,is_demo FROM events"
+     params: tuple = ()
+-    if is_demo is not None:
+-        q += " WHERE is_demo=?"
+-        params = (int(is_demo),)
+-    q += " ORDER BY date"
+-    with connect() as con:
+-        return [dict(r) for r in con.execute(q, params).fetchall()]
++    if IS_POSTGRES:
++        if is_demo is not None:
++            q += " WHERE is_demo=%s"
++            params = (int(is_demo),)
++        q += " ORDER BY date"
++        with connect() as con:
++            return [dict(r) for r in con.execute(q, params).fetchall()]
++    else:
++        if is_demo is not None:
++            q += " WHERE is_demo=?"
++            params = (int(is_demo),)
++        q += " ORDER BY date"
++        with connect() as con:
++            return [dict(r) for r in con.execute(q, params).fetchall()]
+ 
+ 
+ def clear_demo() -> None:
+     with connect() as con:
+-        ids = [r["series_id"] for r in con.execute("SELECT series_id FROM series_meta WHERE is_demo=1")]
+-        for sid in ids:
+-            con.execute("DELETE FROM observations WHERE series_id=?", (sid,))
+-        con.execute("DELETE FROM series_meta WHERE is_demo=1")
+-        con.execute("DELETE FROM events WHERE is_demo=1")
++        if IS_POSTGRES:
++            cur = con.cursor()
++            ids = [r[0] for r in cur.execute("SELECT series_id FROM series_meta WHERE is_demo=1").fetchall()]
++            for sid in ids:
++                cur.execute("DELETE FROM observations WHERE series_id=%s", (sid,))
++            cur.execute("DELETE FROM series_meta WHERE is_demo=1")
++            cur.execute("DELETE FROM events WHERE is_demo=1")
++        else:
++            ids = [r["series_id"] for r in con.execute("SELECT series_id FROM series_meta WHERE is_demo=1")]
++            for sid in ids:
++                con.execute("DELETE FROM observations WHERE series_id=?", (sid,))
++            con.execute("DELETE FROM series_meta WHERE is_demo=1")
++            con.execute("DELETE FROM events WHERE is_demo=1")
+ 
+ 
+ def log_ingest(series_id: str, rows: int, status: str, message: str = "") -> None:
+     with connect() as con:
+-        con.execute("INSERT INTO ingest_log(series_id,run_at,rows,status,message) VALUES (?,?,?,?,?)",
+-                    (series_id, _now(), rows, status, message[:500]))
++        if IS_POSTGRES:
++            con.execute("INSERT INTO ingest_log(series_id,run_at,rows,status,message) VALUES (%s,%s,%s,%s,%s)",
++                        (series_id, _now(), rows, status, message[:500]))
++        else:
++            con.execute("INSERT INTO ingest_log(series_id,run_at,rows,status,message) VALUES (?,?,?,?,?)",
++                        (series_id, _now(), rows, status, message[:500]))
+ 
+ 
+ def recent_ingest_log(limit: int = 30) -> list[dict]:
+     with connect() as con:
+-        return [dict(r) for r in con.execute("SELECT * FROM ingest_log ORDER BY id DESC LIMIT ?", (limit,))]
++        if IS_POSTGRES:
++            return [dict(r) for r in con.execute(
++                "SELECT * FROM ingest_log ORDER BY id DESC LIMIT %s", (limit,)).fetchall()]
++        return [dict(r) for r in con.execute(
++            "SELECT * FROM ingest_log ORDER BY id DESC LIMIT ?", (limit,)).fetchall()]
+ 
+ 
+ def audit(action: str, *, method: str = "", path: str = "", user: str | None = None,
+@@ -153,19 +301,31 @@ def audit(action: str, *, method: str = "", path: str = "", user: str | None = N
+     scenario post, etc.) so an operator can answer 'who changed what, when?'.
+     """
+     with connect() as con:
+-        con.execute(
+-            "INSERT INTO audit_log(at, action, method, path, user, source_ip, params, status_code, detail) "
+-            "VALUES (?,?,?,?,?,?,?,?,?)",
+-            (_now(), action[:80], method[:10], path[:240], (user or "")[:60],
+-             (source_ip or "")[:60], params[:500], status_code, detail[:500]),
+-        )
++        if IS_POSTGRES:
++            con.execute(
++                "INSERT INTO audit_log(at, action, method, path, user, source_ip, params, status_code, detail) "
++                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
++                (_now(), action[:80], method[:10], path[:240], (user or "")[:60],
++                 (source_ip or "")[:60], params[:500], status_code, detail[:500]),
++            )
++        else:
++            con.execute(
++                "INSERT INTO audit_log(at, action, method, path, user, source_ip, params, status_code, detail) "
++                "VALUES (?,?,?,?,?,?,?,?,?)",
++                (_now(), action[:80], method[:10], path[:240], (user or "")[:60],
++                 (source_ip or "")[:60], params[:500], status_code, detail[:500]),
++            )
+ 
+ 
+ def recent_audit_log(limit: int = 100) -> list[dict]:
+     with connect() as con:
++        if IS_POSTGRES:
++            return [dict(r) for r in con.execute(
++                "SELECT id, at, action, method, path, user, source_ip, params, status_code, detail "
++                "FROM audit_log ORDER BY id DESC LIMIT %s", (limit,)).fetchall()]
+         return [dict(r) for r in con.execute(
+             "SELECT id, at, action, method, path, user, source_ip, params, status_code, detail "
+-            "FROM audit_log ORDER BY id DESC LIMIT ?", (limit,))]
++            "FROM audit_log ORDER BY id DESC LIMIT ?", (limit,)).fetchall()]
+ 
+ 
+ def latest_problems(limit: int = 80) -> list[dict]:
+@@ -195,6 +355,14 @@ def data_mode() -> str:
+ 
+ def db_stamp() -> float:
+     """Change marker used to invalidate caches. With WAL, writes land in the -wal file first."""
++    if IS_POSTGRES:
++        # Postgres has no file mtime; use the latest observation timestamp as a stamp.
++        try:
++            with connect() as con:
++                r = con.execute("SELECT COALESCE(MAX(last_fetched), '0') FROM series_meta").fetchone()
++                return hash(r[0]) if r and r[0] else 0.0
++        except Exception:
++            return 0.0
+     stamp = 0.0
+     for p in (DB_PATH, DB_PATH.with_name(DB_PATH.name + "-wal")):
+         try:
+@@ -207,6 +375,10 @@ def db_stamp() -> float:
+ def count_rows(series_id: str) -> int:
+     """Stored rows of a REAL series (synthetic demo rows never count as history worth protecting)."""
+     with connect() as con:
++        if IS_POSTGRES:
++            return int(con.execute(
++                "SELECT COUNT(*) FROM observations o JOIN series_meta m ON m.series_id=o.series_id "
++                "WHERE o.series_id=%s AND m.is_demo=0", (series_id,)).fetchone()[0])
+         return int(con.execute(
+             "SELECT COUNT(*) FROM observations o JOIN series_meta m ON m.series_id=o.series_id "
+             "WHERE o.series_id=? AND m.is_demo=0", (series_id,)).fetchone()[0])
+diff --git a/tests/test_data_layer.py b/tests/test_data_layer.py
+index f4fdf5f..f4e6f72 100644
+--- a/tests/test_data_layer.py
++++ b/tests/test_data_layer.py
+@@ -102,6 +102,21 @@ def test_events_derived_from_policy_rate_and_merge_prefers_curated():
+     assert [e["date"] for e in merged] == sorted(e["date"] for e in merged)
+ 
+ 
++# ---------------- db backend selection ----------------
++def test_db_backend_auto_detects_postgres_url(monkeypatch):
++    """ZTI_DB=postgres://... switches db.py to the Postgres backend (no psycopg2 needed
++    for detection, only for actual connections)."""
++    from app import db as _db
++    monkeypatch.setattr(_db, "DB_PATH", "postgres://user:pw@host:5432/dbname")
++    assert _db._backend() == "postgres"
++    monkeypatch.setattr(_db, "DB_PATH", "postgresql://user:pw@host:5432/dbname")
++    assert _db._backend() == "postgres"
++    monkeypatch.setattr(_db, "DB_PATH", "/tmp/x.sqlite")
++    assert _db._backend() == "sqlite"
++    # Restore the test DB path so other tests in this session aren't affected
++    monkeypatch.setattr(_db, "DB_PATH", _db.DB_PATH)
++
++
+ # ---------------- connectors ----------------
+ def test_http_get_retries_then_succeeds_and_does_not_retry_404(monkeypatch):
+     monkeypatch.setattr(base.time, "sleep", lambda s: None)
+-- 
+2.47.3
+

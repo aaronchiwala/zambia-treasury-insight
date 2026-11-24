@@ -1,0 +1,116 @@
+From 702f4e8ed1b004534fcbc65a91de8bb3bb166c07 Mon Sep 17 00:00:00 2001
+From: Zambia Treasury Insight <patch@local>
+Date: Tue, 24 Nov 2026 18:24:44 +0000
+Subject: [PATCH 05/12] Tier 1 #5: /api/security endpoint to verify
+ ZTI_PASSWORD on Render
+
+Adds a publicly-readable /api/security endpoint (alongside /api/health) that
+reports:
+  - auth_enabled (bool): is ZTI_PASSWORD set?
+  - username: the configured ZTI_USER (default 'treasury') if auth is on
+  - hosted_on_render: detects the RENDER env signal
+  - controls_locked: True on a public host without a password (data controls disabled)
+  - advice: human-readable next-step guidance
+
+This is exempted from Basic Auth so an operator can verify the deployment's
+security posture from their laptop without needing credentials:
+  curl -s https://app.onrender.com/api/security | python -m json.tool
+
+Never echoes the password value itself.
+
+Updates docs/DEPLOY_RENDER.md section 5 with the verification command. Adds one
+test (71 total, all passing).
+---
+ app/main.py                      | 25 +++++++++++++++++++++++--
+ docs/DEPLOY_RENDER.md            |  7 +++++++
+ tests/test_connectors_and_api.py | 12 ++++++++++++
+ 3 files changed, 42 insertions(+), 2 deletions(-)
+
+diff --git a/app/main.py b/app/main.py
+index 585f08d..445b0ed 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -69,9 +69,10 @@ app = FastAPI(title="Zambia Treasury Insight", version="0.2.0", lifespan=lifespa
+ 
+ @app.middleware("http")
+ async def optional_basic_auth(request, call_next):
+-    """If ZTI_PASSWORD is set, every route except /api/health needs HTTP Basic credentials."""
++    """If ZTI_PASSWORD is set, every route except /api/health and /api/security needs HTTP Basic credentials.
++    /api/security stays open so an operator can verify the auth posture without authenticating."""
+     password = os.environ.get("ZTI_PASSWORD")
+-    if not password or request.url.path == "/api/health":
++    if not password or request.url.path in ("/api/health", "/api/security"):
+         return await call_next(request)
+     user = os.environ.get("ZTI_USER", "treasury")
+     ok = False
+@@ -157,6 +158,26 @@ def health():
+     return dict(ok=True)
+ 
+ 
++@app.get("/api/security")
++def security():
++    """Publicly inspectable security posture. Helps verify ZTI_PASSWORD is actually set on Render.
++
++    Returns whether auth is enabled, whether data controls are locked, and the configured username
++    (if any). Never echoes the password itself.
++    """
++    password_set = bool(os.environ.get("ZTI_PASSWORD"))
++    user = os.environ.get("ZTI_USER", "treasury") if password_set else None
++    return dict(
++        auth_enabled=password_set,
++        username=user,
++        hosted_on_render=bool(os.environ.get("RENDER")),
++        controls_locked=_hosted_unprotected(),
++        advice=("All endpoints (except /api/health) require HTTP Basic Auth."
++                if password_set else
++                "Auth is OFF. On a public host, set ZTI_PASSWORD in the Render dashboard "
++                "(Environment tab) and redeploy. Data controls are locked until you do."))
++
++
+ def _hosted_unprotected() -> bool:
+     """On a public host (Render sets RENDER) without a password, nobody may change data from the browser."""
+     return bool(os.environ.get("RENDER")) and not os.environ.get("ZTI_PASSWORD")
+diff --git a/docs/DEPLOY_RENDER.md b/docs/DEPLOY_RENDER.md
+index 5f214b8..5baba64 100644
+--- a/docs/DEPLOY_RENDER.md
++++ b/docs/DEPLOY_RENDER.md
+@@ -52,6 +52,13 @@ source, row count and date range. A failed source is listed there with the reaso
+ ## 5. Security
+ 
+ * Keep `ZTI_PASSWORD` set: without it the site is public. Render provides HTTPS.
++* **Verify it from your laptop** without needing the password yourself:
++  ```bash
++  curl -s https://your-app.onrender.com/api/security | python -m json.tool
++  ```
++  You should see `"auth_enabled": true`, `"username": "treasury"`, and `"controls_locked": false`.
++  If you see `"auth_enabled": false` and `"controls_locked": true`, the password is missing — go back to
++  the Render dashboard → Environment → add `ZTI_PASSWORD`, save, and wait for the redeploy.
+ * This tool uses only public data. Do not upload internal bank data to a public host; for that, deploy inside the bank's
+   own infrastructure.
+ 
+diff --git a/tests/test_connectors_and_api.py b/tests/test_connectors_and_api.py
+index 1d29eab..eae5151 100644
+--- a/tests/test_connectors_and_api.py
++++ b/tests/test_connectors_and_api.py
+@@ -47,6 +47,18 @@ def test_status_flags_demo_mode():
+     assert all(s["is_demo"] for s in r["series"])
+ 
+ 
++def test_security_endpoint_reports_auth_posture():
++    # In tests ZTI_PASSWORD is unset, so auth is off and advice explains how to enable it.
++    r = client.get("/api/security")
++    assert r.status_code == 200
++    body = r.json()
++    assert body["auth_enabled"] is False
++    assert body["username"] is None
++    assert "ZTI_PASSWORD" in body["advice"]
++    # The endpoint must NOT echo any password (there isn't one set, but the field shouldn't exist)
++    assert "password" not in body
++
++
+ def test_overview_and_series():
+     ov = client.get("/api/overview").json()
+     assert ov["cards"][0]["series_id"] == "USDZMW"
+-- 
+2.47.3
+

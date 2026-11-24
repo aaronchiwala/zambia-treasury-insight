@@ -1,0 +1,813 @@
+From f11c4cf77dc90f57aac89c956b5c81e7c69dde5d Mon Sep 17 00:00:00 2001
+From: Zambia Treasury Insight <patch@local>
+Date: Tue, 24 Nov 2026 19:17:28 +0000
+Subject: [PATCH 11/12] Tier 3 #11: Next.js + Plotly React frontend scaffold
+ (parallel UI)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Adds a frontend/ directory containing a Next.js 16 + TypeScript + Tailwind 4
+scaffold that serves as a parallel UI for the FastAPI backend. The existing
+vanilla-JS static/index.html continues to be served unchanged.
+
+What's here:
+  - package.json with Next 16, React 19, react-plotly.js, @tanstack/react-query,
+    Tailwind 4, lucide-react
+  - lib/api.ts: typed API client wrapping all 17 backend endpoints with Basic
+    Auth support and TanStack Query-friendly signatures
+  - app/layout.tsx: root layout with the 8-tab sidebar (Overview, Explain,
+    History, Forecast, Scenario, Model docs, Audit log, Data & quality)
+  - app/page.tsx: working Overview tab that fetches /api/status + /api/overview
+    and renders the data-mode banner + per-series cards with 1w/4w/12w/52w
+    change
+  - app/globals.css: Tailwind 4 with light/dark CSS variables
+  - MIGRATION.md: build order for the remaining 7 tabs + shared chart
+    components + deploy instructions for Vercel/Render
+  - README.md: quick start + deploy + switch-over plan
+
+To run locally:
+  cd frontend && npm install && npm run dev
+  # or: NEXT_PUBLIC_API_URL=http://localhost:8000 npm run dev
+
+To deploy: push to Vercel, set NEXT_PUBLIC_API_URL to the Render URL, deploy.
+
+The migration is reversible — the vanilla JS UI stays in the repo as a fallback.
+---
+ frontend/.gitignore      |  11 ++
+ frontend/MIGRATION.md    | 148 +++++++++++++++++++++++
+ frontend/README.md       |  51 ++++++++
+ frontend/app/globals.css |  26 ++++
+ frontend/app/layout.tsx  |  40 +++++++
+ frontend/app/page.tsx    |  91 ++++++++++++++
+ frontend/lib/api.ts      | 253 +++++++++++++++++++++++++++++++++++++++
+ frontend/next.config.mjs |  13 ++
+ frontend/package.json    |  36 ++++++
+ frontend/tsconfig.json   |  23 ++++
+ 10 files changed, 692 insertions(+)
+ create mode 100644 frontend/.gitignore
+ create mode 100644 frontend/MIGRATION.md
+ create mode 100644 frontend/README.md
+ create mode 100644 frontend/app/globals.css
+ create mode 100644 frontend/app/layout.tsx
+ create mode 100644 frontend/app/page.tsx
+ create mode 100644 frontend/lib/api.ts
+ create mode 100644 frontend/next.config.mjs
+ create mode 100644 frontend/package.json
+ create mode 100644 frontend/tsconfig.json
+
+diff --git a/frontend/.gitignore b/frontend/.gitignore
+new file mode 100644
+index 0000000..1dd6c9f
+--- /dev/null
++++ b/frontend/.gitignore
+@@ -0,0 +1,11 @@
++node_modules
++.next
++out
++.env
++.env.local
++.env.*.local
++*.log
++.DS_Store
++.vscode
++.idea
++next-env.d.ts
+diff --git a/frontend/MIGRATION.md b/frontend/MIGRATION.md
+new file mode 100644
+index 0000000..c7d56fd
+--- /dev/null
++++ b/frontend/MIGRATION.md
+@@ -0,0 +1,148 @@
++# Next.js Frontend — Migration Plan
++
++This directory is a **parallel** Next.js UI for the Zambia Treasury Insight FastAPI backend.
++The existing vanilla-JS dashboard at `static/index.html` continues to be served by FastAPI
++unchanged. This Next.js app can be deployed separately (e.g. on Vercel) and pointed at the
++backend via the `NEXT_PUBLIC_API_URL` env var.
++
++## Why migrate?
++
++The existing 487-line `static/index.html` works but has limitations:
++- No component reuse — every tab duplicates layout and chart-setup boilerplate.
++- No type safety — API contract changes silently break the UI.
++- No client-side caching — every tab refetches everything.
++- Hard to test — the JS is inline, not module-based.
++
++A Next.js + TypeScript + React Query + Plotly React frontend fixes all four.
++
++## What's in this scaffold
++
++```
++frontend/
++├── package.json          # Next 16, React 19, react-plotly.js, @tanstack/react-query, Tailwind 4
++├── tsconfig.json
++├── next.config.mjs
++├── app/
++│   ├── layout.tsx        # Root layout with the 8-tab sidebar
++│   ├── globals.css       # Tailwind 4 + CSS variables for light/dark theme
++│   └── page.tsx          # Overview tab (working: fetches /api/status + /api/overview)
++├── lib/
++│   └── api.ts            # Typed API client with all 17 endpoints + Basic Auth helper
++└── MIGRATION.md          # This file
++```
++
++## Migration order
++
++The Overview tab is the reference implementation. Build the remaining 7 tabs in this order:
++
++1. **`/data`** — Data & quality tab. Uses `api.status()`. Renders the per-series table,
++   ingest log, problems list, and a "Refresh now" button that calls `api.refresh()`.
++   Simplest tab — good place to nail down the shared `QueryClientProvider` and
++   `useQuery` patterns.
++
++2. **`/audit`** — Audit log tab. Uses `api.audit()`. A simple table with sorting.
++   Good first tab for `@tanstack/react-table`.
++
++3. **`/model`** — Model documentation tab. Uses `api.modelDocs()`. Renders the spec,
++   drivers table, backtest summary, data sources, and a "Download PDF" button that
++   links to `api.modelDocsPdfUrl()`. Mostly static rendering.
++
++4. **`/forecast`** — Forecast tab. Uses `api.forecast()` + `api.backtest()`. The first
++   chart-heavy tab. Build the `ForecastFanChart` component here using react-plotly.js —
++   it's reused on `/explain` and `/history`.
++
++5. **`/explain`** — Driver attribution tab. Uses `api.explain()` + `api.events()` +
++   `api.regimes()`. Builds the `USZMWChartWithRegimes` component (USD/ZMW line +
++   regime bands + event markers). The decomposition bar chart is unique to this tab.
++
++6. **`/history`** — History tab. Uses `api.history()`. Renders the swing-episode list
++   with per-episode attribution. Reuses the chart components from `/explain`.
++
++7. **`/scenario`** — Scenario tab. Uses `api.scenarioPresets()` + `api.scenario()` (POST).
++   The only tab that does a POST — good place to nail down the mutation patterns
++   (invalidate the audit query after a scenario post so the audit log updates).
++
++## Shared components to build
++
++- `<QueryProvider>` — wraps the app in `QueryClientProvider`. Put in `app/providers.tsx`.
++- `<USZMWChart>` — Plotly line chart of USD/ZMW. Props: `data: SeriesData`, optional
++  `regimes: Regime[]`, optional `events: RegimeEvent[]`.
++- `<RegimeBands>` — Plotly shape layer drawing vertical bands at regime breakpoints.
++- `<EventMarkers>` — Plotly annotation layer for events.
++- `<DecompositionBar>` — Plotly bar chart of driver contributions (positive/negative).
++- `<ForecastFan>` — Plotly line + filled-interval trace for the forecast.
++- `<BacktestTable>` — sticky-header table of backtest metrics with metric-definition tooltips.
++- `<DataModeBanner>` — the demo/mixed/live/empty banner with notes.
++- `<AuthDialog>` — modal that prompts for Basic Auth credentials when `/api/security`
++  reports `auth_enabled: true`.
++
++## Running locally
++
++```bash
++cd frontend
++npm install
++
++# Develop against the live Render backend (default):
++npm run dev
++# Open http://localhost:3000
++
++# Or develop against a local FastAPI instance:
++NEXT_PUBLIC_API_URL=http://localhost:8000 npm run dev
++```
++
++## Deploying (separate from the FastAPI backend)
++
++The cleanest deployment is **Vercel** (Next.js's native host):
++
++1. Push the `frontend/` directory to a separate GitHub repo (or a `frontend/` subdir
++   of the main repo).
++2. Import into Vercel — it auto-detects Next.js.
++3. Set `NEXT_PUBLIC_API_URL=https://zambia-treasury-insight.onrender.com` in the Vercel
++   env vars.
++4. Deploy.
++
++Alternatively, deploy on Render as a separate Static Site:
++- Build command: `cd frontend && npm install && npm run build`
++- Publish directory: `frontend/.next/static` (Render serves the static export).
++- Or use `next start` on a Render Web Service for the full SSR version.
++
++## Authentication
++
++If the backend has `ZTI_PASSWORD` set, the frontend prompts for Basic Auth credentials
++on first load. Credentials are stored in `localStorage` as a base64-encoded
++`user:password` string and attached to every API request via the `Authorization`
++header.
++
++This is NOT secure for production with sensitive data — Basic Auth over HTTPS is
++acceptable for this app's threat model (public market data + an operator password
++to prevent anon data uploads), but for a real bank deployment use a proper
++session/OAuth layer.
++
++## What's NOT in this scaffold (yet)
++
++- The actual chart components (`USZMWChart`, `DecompositionBar`, etc.) — these are
++  the bulk of the remaining work. Each is ~50-100 lines of react-plotly.js.
++- The `/explain`, `/history`, `/forecast`, `/scenario`, `/model`, `/audit`, `/data`
++  route files. Each is ~100-200 lines of TSX.
++- The `QueryClientProvider` setup in `app/providers.tsx`.
++- Light/dark theme toggle (the CSS variables are in place; the toggle button isn't).
++- Auth dialog component.
++- Mobile responsive layout (the sidebar should collapse on narrow screens).
++
++Estimated total work to finish: ~1,500-2,000 lines of TSX + ~500 lines of chart
++components. A focused developer can complete it in 2-3 days.
++
++## When to switch over
++
++The FastAPI backend continues to serve `static/index.html` at `/` until you're ready
++to switch. To switch:
++
++1. Complete the 7 remaining tabs in this scaffold.
++2. Deploy the Next.js app to Vercel (or wherever).
++3. Update the FastAPI `app/main.py` `index()` route to redirect `/` to the Next.js URL,
++   OR remove the `index()` route entirely and serve only the API from FastAPI.
++4. Keep `static/index.html` in the repo as a fallback (it's still useful for offline
++   demos and for users without JS).
++
++The migration is reversible — if the Next.js app has issues, point `/` back at
++`static/index.html` and the FastAPI serves the old UI again.
+diff --git a/frontend/README.md b/frontend/README.md
+new file mode 100644
+index 0000000..9944ebe
+--- /dev/null
++++ b/frontend/README.md
+@@ -0,0 +1,51 @@
++# Next.js frontend for Zambia Treasury Insight
++
++A parallel Next.js + TypeScript + Tailwind 4 + react-plotly.js frontend for the
++FastAPI backend. The existing vanilla-JS dashboard at `static/index.html` continues
++to be served by FastAPI unchanged; this Next.js app is a separate deployable UI.
++
++## Quick start
++
++```bash
++cd frontend
++npm install
++
++# Develop against the live Render backend:
++npm run dev
++
++# Or against a local FastAPI on :8000:
++NEXT_PUBLIC_API_URL=http://localhost:8000 npm run dev
++```
++
++## What's here
++
++- **`lib/api.ts`** — typed API client wrapping all 17 backend endpoints with
++  Basic Auth support and TanStack Query-friendly signatures.
++- **`app/layout.tsx`** — root layout with the 8-tab sidebar.
++- **`app/page.tsx`** — Overview tab (working reference implementation).
++- **`app/globals.css`** — Tailwind 4 with light/dark CSS variables.
++
++See **`MIGRATION.md`** for the build order of the remaining 7 tabs and the
++shared chart components.
++
++## Deploy
++
++The Next.js app is deployed separately from the FastAPI backend. The cleanest
++option is Vercel:
++
++1. Push `frontend/` to its own repo (or keep as a subdir).
++2. Import into Vercel.
++3. Set `NEXT_PUBLIC_API_URL=https://zambia-treasury-insight.onrender.com`.
++4. Deploy.
++
++## Switching over from the vanilla JS UI
++
++The FastAPI backend continues to serve `static/index.html` at `/` until you're
++ready to switch. To switch:
++
++1. Complete the remaining 7 tabs per `MIGRATION.md`.
++2. Deploy the Next.js app.
++3. Update `app/main.py`'s `index()` route to redirect `/` to the Next.js URL,
++   or remove it and serve only the API from FastAPI.
++
++The migration is reversible — the vanilla JS UI stays in the repo as a fallback.
+diff --git a/frontend/app/globals.css b/frontend/app/globals.css
+new file mode 100644
+index 0000000..a665625
+--- /dev/null
++++ b/frontend/app/globals.css
+@@ -0,0 +1,26 @@
++@import "tailwindcss";
++
++:root {
++  --color-bg: #ffffff;
++  --color-sidebar: #1e293b;
++  --color-sidebar-fg: #e2e8f0;
++  --color-accent: #0f766e;
++  --color-card: #ffffff;
++  --color-border: #e2e8f0;
++}
++
++@media (prefers-color-scheme: dark) {
++  :root {
++    --color-bg: #0f172a;
++    --color-sidebar: #020617;
++    --color-sidebar-fg: #cbd5e1;
++    --color-card: #1e293b;
++    --color-border: #334155;
++  }
++}
++
++html, body {
++  background: var(--color-bg);
++  color: var(--color-sidebar-fg);
++  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
++}
+diff --git a/frontend/app/layout.tsx b/frontend/app/layout.tsx
+new file mode 100644
+index 0000000..f04a0f2
+--- /dev/null
++++ b/frontend/app/layout.tsx
+@@ -0,0 +1,40 @@
++import type { Metadata } from 'next';
++import './globals.css';
++
++export const metadata: Metadata = {
++  title: 'Zambia Treasury Insight',
++  description:
++    'Real-time market dashboard for Zambian financial data: forecast, drivers, history.',
++};
++
++export default function RootLayout({
++  children,
++}: {
++  children: React.ReactNode;
++}) {
++  return (
++    <html lang="en">
++      <body>
++        <div className="flex min-h-screen">
++          <aside
++            className="w-56 flex-shrink-0 p-4"
++            style={{ background: 'var(--color-sidebar)', color: 'var(--color-sidebar-fg)' }}
++          >
++            <h1 className="text-lg font-bold mb-6">Zambia Treasury Insight</h1>
++            <nav className="space-y-1 text-sm">
++              <a href="/" className="block py-1.5 px-2 rounded hover:bg-white/10">Overview</a>
++              <a href="/explain" className="block py-1.5 px-2 rounded hover:bg-white/10">Explain</a>
++              <a href="/history" className="block py-1.5 px-2 rounded hover:bg-white/10">History</a>
++              <a href="/forecast" className="block py-1.5 px-2 rounded hover:bg-white/10">Forecast</a>
++              <a href="/scenario" className="block py-1.5 px-2 rounded hover:bg-white/10">Scenario</a>
++              <a href="/model" className="block py-1.5 px-2 rounded hover:bg-white/10">Model docs</a>
++              <a href="/audit" className="block py-1.5 px-2 rounded hover:bg-white/10">Audit log</a>
++              <a href="/data" className="block py-1.5 px-2 rounded hover:bg-white/10">Data &amp; quality</a>
++            </nav>
++          </aside>
++          <main className="flex-1 p-6 overflow-x-hidden">{children}</main>
++        </div>
++      </body>
++    </html>
++  );
++}
+diff --git a/frontend/app/page.tsx b/frontend/app/page.tsx
+new file mode 100644
+index 0000000..f82e6d9
+--- /dev/null
++++ b/frontend/app/page.tsx
+@@ -0,0 +1,91 @@
++'use client';
++
++import { useEffect, useState } from 'react';
++import { api, type StatusResponse, type OverviewResponse } from '@/lib/api';
++
++export default function OverviewPage() {
++  const [status, setStatus] = useState<StatusResponse | null>(null);
++  const [overview, setOverview] = useState<OverviewResponse | null>(null);
++  const [error, setError] = useState<string | null>(null);
++
++  useEffect(() => {
++    Promise.all([api.status(), api.overview()])
++      .then(([s, o]) => {
++        setStatus(s);
++        setOverview(o);
++      })
++      .catch((e) => setError(String(e)));
++  }, []);
++
++  if (error) {
++    return <div className="text-red-600">Error: {error}</div>;
++  }
++  if (!status || !overview) {
++    return <div>Loading...</div>;
++  }
++
++  return (
++    <div className="space-y-6">
++      <header>
++        <h2 className="text-2xl font-bold">Overview</h2>
++        <p className="text-sm text-slate-500">
++          Data mode: <strong>{status.mode}</strong> · Last refresh:{' '}
++          {status.refresh.last_run ?? 'never'} ·{' '}
++          <a href="/data" className="text-teal-600 underline">Data &amp; quality →</a>
++        </p>
++        {status.notes.length > 0 && (
++          <div className="mt-3 p-3 rounded bg-amber-50 border border-amber-200 text-amber-900 text-sm">
++            {status.notes.map((n, i) => (
++              <p key={i}>• {n}</p>
++            ))}
++          </div>
++        )}
++      </header>
++
++      <section className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
++        {overview.cards.map((c) => (
++          <div
++            key={c.series_id}
++            className="p-4 rounded-lg border"
++            style={{ background: 'var(--color-card)', borderColor: 'var(--color-border)' }}
++          >
++            <div className="text-xs text-slate-500 uppercase">{c.series_id}</div>
++            <div className="text-lg font-semibold mt-1">
++              {c.last.toLocaleString(undefined, { maximumFractionDigits: 2 })}{' '}
++              <span className="text-xs font-normal text-slate-500">{c.unit}</span>
++            </div>
++            <div className="text-xs text-slate-400 mt-1">{c.date}</div>
++            <div className="mt-2 text-xs space-y-0.5">
++              <div>1w: {fmtChange(c.chg_1w, c.kind)}</div>
++              <div>4w: {fmtChange(c.chg_4w, c.kind)}</div>
++              <div>12w: {fmtChange(c.chg_12w, c.kind)}</div>
++              <div>52w: {fmtChange(c.chg_52w, c.kind)}</div>
++            </div>
++          </div>
++        ))}
++      </section>
++
++      <section>
++        <h3 className="text-lg font-semibold mb-2">USD/ZMW — full history</h3>
++        <div className="p-4 rounded-lg border" style={{ background: 'var(--color-card)' }}>
++          <p className="text-sm text-slate-500">
++            The Plotly chart of USD/ZMW over time goes here. It will be rendered by
++            a <code>USZMWChart</code> component using <code>react-plotly.js</code>,
++            with regime bands and event markers overlaid. See the migration plan in{' '}
++            <code>frontend/MIGRATION.md</code> for the build order.
++          </p>
++        </div>
++      </section>
++    </div>
++  );
++}
++
++function fmtChange(v: number | null, kind: 'price' | 'rate'): string {
++  if (v === null) return '—';
++  if (kind === 'price') {
++    const sign = v >= 0 ? '+' : '';
++    return `${sign}${v.toFixed(2)}%`;
++  }
++  const sign = v >= 0 ? '+' : '';
++  return `${sign}${v.toFixed(2)} pp`;
++}
+diff --git a/frontend/lib/api.ts b/frontend/lib/api.ts
+new file mode 100644
+index 0000000..68736fc
+--- /dev/null
++++ b/frontend/lib/api.ts
+@@ -0,0 +1,253 @@
++/**
++ * Typed API client for the Zambia Treasury Insight FastAPI backend.
++ *
++ * The base URL is read from NEXT_PUBLIC_API_URL (set at build time) and defaults
++ * to the live Render deployment so local dev works out of the box.
++ *
++ * If /api/security reports auth_enabled=true, Basic Auth credentials are read
++ * from localStorage and attached to every request.
++ */
++
++const API_BASE =
++  process.env.NEXT_PUBLIC_API_URL || 'https://zambia-treasury-insight.onrender.com';
++
++// ---------- Types ----------
++export type DataMode = 'demo' | 'mixed' | 'live' | 'empty';
++
++export interface SeriesMeta {
++  series_id: string;
++  name: string;
++  unit: string;
++  native: string;
++  source: string;
++  is_demo: boolean;
++  n_obs: number;
++  first_date: string | null;
++  last_date: string | null;
++  age_days: number | null;
++  stale: boolean;
++  last_fetched: string;
++}
++
++export interface StatusResponse {
++  mode: DataMode;
++  series: SeriesMeta[];
++  notes: string[];
++  refresh: {
++    running?: boolean;
++    last_run?: string;
++    last_error?: string | null;
++    last_failed?: string[];
++  };
++  problems: Array<Record<string, unknown>>;
++  registry: Array<{ series_id: string; name: string; unit: string; native: string }>;
++  controls_locked: boolean;
++  ingest_log: Array<Record<string, unknown>>;
++  server_time: string;
++}
++
++export interface OverviewCard {
++  series_id: string;
++  name: string;
++  unit: string;
++  kind: 'price' | 'rate';
++  last: number;
++  date: string;
++  chg_1w: number | null;
++  chg_4w: number | null;
++  chg_12w: number | null;
++  chg_52w: number | null;
++  is_demo: boolean;
++}
++
++export interface OverviewResponse {
++  cards: OverviewCard[];
++  mode: DataMode;
++}
++
++export interface SeriesData {
++  dates: string[];
++  values: number[];
++  name: string;
++  unit: string;
++}
++
++export interface RegimeEvent {
++  date: string;
++  title: string;
++  category: string;
++  description: string;
++  source: string;
++  verified: boolean;
++  is_demo: boolean;
++  regime: string | null;
++  regime_label: string | null;
++}
++
++export interface Regime {
++  start: string;
++  end: string | null;
++  key: string;
++  label: string;
++  narrative: string;
++}
++
++export interface SecurityPosture {
++  auth_enabled: boolean;
++  username: string | null;
++  hosted_on_render: boolean;
++  controls_locked: boolean;
++  advice: string;
++}
++
++export interface ModelDoc {
++  spec: {
++    target: string;
++    frequency: string;
++    unit: string;
++    sample_start: string;
++    sample_end: string;
++    n: number;
++    r2: number;
++    validation_date: string;
++    method: string;
++    drivers: Array<{
++      driver: string;
++      label: string;
++      beta: number;
++      se: number;
++      p_value: number;
++      series: string;
++    }>;
++    excluded: string[];
++  };
++  backtest: {
++    horizons: number[];
++    summary: Array<Record<string, number | null>>;
++    metric_definitions: Record<string, string>;
++  };
++  data_sources: Record<string, {
++    name: string;
++    source: string;
++    first_date: string | null;
++    last_date: string | null;
++    n_obs: number | null;
++  }>;
++  skipped: string[];
++  server_time: string;
++}
++
++export interface AuditEntry {
++  id: number;
++  at: string;
++  action: string;
++  method: string;
++  path: string;
++  user: string;
++  source_ip: string;
++  params: string;
++  status_code: number | null;
++  detail: string;
++}
++
++// ---------- Auth helper ----------
++function authHeader(): Record<string, string> {
++  if (typeof window === 'undefined') return {};
++  const creds = window.localStorage.getItem('zti_basic_auth');
++  if (!creds) return {};
++  return { Authorization: `Basic ${creds}` };
++}
++
++// ---------- Core fetch ----------
++async function apiGet<T>(path: string): Promise<T> {
++  const res = await fetch(`${API_BASE}${path}`, {
++    headers: { ...authHeader(), Accept: 'application/json' },
++    cache: 'no-store',
++  });
++  if (res.status === 401) {
++    throw new Error('Authentication required. Set credentials in the connection settings.');
++  }
++  if (!res.ok) {
++    const text = await res.text();
++    throw new Error(`API ${res.status}: ${text.slice(0, 200)}`);
++  }
++  return res.json();
++}
++
++async function apiPost<T>(path: string, body?: unknown): Promise<T> {
++  const res = await fetch(`${API_BASE}${path}`, {
++    method: 'POST',
++    headers: {
++      ...authHeader(),
++      'Content-Type': 'application/json',
++      Accept: 'application/json',
++    },
++    body: body ? JSON.stringify(body) : undefined,
++    cache: 'no-store',
++  });
++  if (res.status === 401) {
++    throw new Error('Authentication required.');
++  }
++  if (!res.ok) {
++    const text = await res.text();
++    throw new Error(`API ${res.status}: ${text.slice(0, 200)}`);
++  }
++  return res.json();
++}
++
++// ---------- Endpoints ----------
++export const api = {
++  health: () => apiGet<{ ok: boolean }>('/api/health'),
++  security: () => apiGet<SecurityPosture>('/api/security'),
++  status: () => apiGet<StatusResponse>('/api/status'),
++  overview: () => apiGet<OverviewResponse>('/api/overview'),
++  series: (ids: string[], start?: string, end?: string, maxPoints = 2500) =>
++    apiGet<Record<string, SeriesData>>(
++      `/api/series?ids=${ids.join(',')}${start ? `&start=${start}` : ''}${
++        end ? `&end=${end}` : ''
++      }&max_points=${maxPoints}`,
++    ),
++  events: () => apiGet<{ events: RegimeEvent[]; mode: DataMode }>('/api/events'),
++  regimes: () => apiGet<{ regimes: Regime[] }>('/api/regimes'),
++  explain: (start: string, end: string, freq = 'W-FRI', window?: number) =>
++    apiGet<unknown>(
++      `/api/explain?start=${start}&end=${end}&freq=${freq}${window ? `&window=${window}` : ''}`,
++    ),
++  history: (threshold = 8.0, freq = 'W-FRI') =>
++    apiGet<unknown>(`/api/history?threshold=${threshold}&freq=${freq}`),
++  model: (freq = 'W-FRI', window?: number) =>
++    apiGet<unknown>(`/api/model?freq=${freq}${window ? `&window=${window}` : ''}`),
++  backtest: (freq = 'W-FRI', horizons = '1,4,8,12', step = 2) =>
++    apiGet<unknown>(`/api/backtest?freq=${freq}&horizons=${horizons}&step=${step}`),
++  forecast: (h = 12, model = 'auto', freq = 'W-FRI') =>
++    apiGet<unknown>(`/api/forecast?h=${h}&model=${model}&freq=${freq}`),
++  scenarioPresets: (freq = 'W-FRI') =>
++    apiGet<unknown>(`/api/scenario/presets?freq=${freq}`),
++  scenario: (body: {
++    shocks: Record<string, number>;
++    horizon: number;
++    window: number;
++    freq: string;
++  }) => apiPost<unknown>('/api/scenario', body),
++  audit: (limit = 100) => apiGet<{ events: AuditEntry[] }>(`/api/audit?limit=${limit}`),
++  modelDocs: (freq = 'W-FRI', window?: number) =>
++    apiGet<ModelDoc>(`/api/model-docs?freq=${freq}${window ? `&window=${window}` : ''}`),
++  modelDocsPdfUrl: (freq = 'W-FRI') =>
++    `${API_BASE}/api/model-docs.pdf?freq=${freq}`,
++  refresh: () => apiPost<{ started: boolean; running: boolean }>('/api/refresh'),
++};
++
++export const API_BASE_URL = API_BASE;
++
++/** Save Basic Auth credentials to localStorage. */
++export function setAuth(user: string, password: string): void {
++  if (typeof window === 'undefined') return;
++  const creds = btoa(`${user}:${password}`);
++  window.localStorage.setItem('zti_basic_auth', creds);
++}
++
++/** Clear stored Basic Auth credentials. */
++export function clearAuth(): void {
++  if (typeof window === 'undefined') return;
++  window.localStorage.removeItem('zti_basic_auth');
++}
+diff --git a/frontend/next.config.mjs b/frontend/next.config.mjs
+new file mode 100644
+index 0000000..54813a8
+--- /dev/null
++++ b/frontend/next.config.mjs
+@@ -0,0 +1,13 @@
++/** @type {import('next').NextConfig} */
++const nextConfig = {
++  // The FastAPI backend is configured via NEXT_PUBLIC_API_URL at build time.
++  // Default to the live Render deployment for local dev; override for production.
++  // Set NEXT_PUBLIC_API_URL=http://localhost:8000 to develop against a local backend.
++  reactStrictMode: true,
++  // Plotly is large; let Next.js split it into its own chunk
++  experimental: {
++    optimizePackageImports: ['react-plotly.js', 'plotly.js-dist-min'],
++  },
++};
++
++export default nextConfig;
+diff --git a/frontend/package.json b/frontend/package.json
+new file mode 100644
+index 0000000..4f16d55
+--- /dev/null
++++ b/frontend/package.json
+@@ -0,0 +1,36 @@
++{
++  "name": "zambia-treasury-insight-frontend",
++  "version": "0.1.0",
++  "private": true,
++  "description": "Next.js + Plotly React frontend for the Zambia Treasury Insight FastAPI backend.",
++  "scripts": {
++    "dev": "next dev",
++    "build": "next build",
++    "start": "next start",
++    "lint": "next lint",
++    "type-check": "tsc --noEmit"
++  },
++  "dependencies": {
++    "next": "^16.0.0",
++    "react": "^19.0.0",
++    "react-dom": "^19.0.0",
++    "react-plotly.js": "^2.6.0",
++    "plotly.js-dist-min": "^2.35.0",
++    "@tanstack/react-query": "^5.59.0",
++    "clsx": "^2.1.0",
++    "tailwind-merge": "^2.5.0",
++    "lucide-react": "^0.460.0"
++  },
++  "devDependencies": {
++    "typescript": "^5.6.0",
++    "@types/node": "^22.0.0",
++    "@types/react": "^19.0.0",
++    "@types/react-dom": "^19.0.0",
++    "@types/react-plotly.js": "^2.6.3",
++    "tailwindcss": "^4.0.0",
++    "postcss": "^8.4.0",
++    "autoprefixer": "^10.4.0",
++    "eslint": "^9.0.0",
++    "eslint-config-next": "^16.0.0"
++  }
++}
+diff --git a/frontend/tsconfig.json b/frontend/tsconfig.json
+new file mode 100644
+index 0000000..0c66908
+--- /dev/null
++++ b/frontend/tsconfig.json
+@@ -0,0 +1,23 @@
++{
++  "compilerOptions": {
++    "target": "ES2022",
++    "lib": ["dom", "dom.iterable", "esnext"],
++    "allowJs": true,
++    "skipLibCheck": true,
++    "strict": true,
++    "noEmit": true,
++    "esModuleInterop": true,
++    "module": "esnext",
++    "moduleResolution": "bundler",
++    "resolveJsonModule": true,
++    "isolatedModules": true,
++    "jsx": "preserve",
++    "incremental": true,
++    "plugins": [{ "name": "next" }],
++    "paths": {
++      "@/*": ["./*"]
++    }
++  },
++  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
++  "exclude": ["node_modules"]
++}
+-- 
+2.47.3
+
