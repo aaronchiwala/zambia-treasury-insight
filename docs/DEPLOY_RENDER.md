@@ -29,7 +29,7 @@ and the environment variables listed in `render.yaml`.)
 
 ## 2. First start
 
-Open the service URL and sign in. A "Loading live data" banner appears while the server fetches Bank of Zambia, FRED
+Open the service URL and sign in. Live loading starts by itself on Render. A "Loading live data" banner appears while the server fetches Bank of Zambia, FRED
 and copper data (about a minute); the page reloads itself. Then open **Data & quality**: every series should show its
 source, row count and date range. A failed source is listed there with the reason, and the server retries every 10 minutes.
 
@@ -68,6 +68,9 @@ message). Then you have three ways forward, in this order:
 3. **Make it permanent:** save the same file as `data/manual/USDZMW.csv` (`date,value`) in GitHub. It is loaded on every
    start (the free Render disk is wiped on restart, so uploads alone do not survive). It is used only while the live
    feed is failing; once the feed works again it takes over automatically.
+
+If live data cannot be fetched, the page opens on **Data & quality** with the reason and three buttons: **Load live data now**,
+**Load demo data (synthetic, clearly bannered)** and file upload.
 
 ## Troubleshooting
 

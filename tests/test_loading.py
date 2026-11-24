@@ -188,8 +188,9 @@ def test_upload_replaces_demo_data_only_when_real_data_arrives(tmp_db):
 
 def test_public_host_without_password_cannot_change_data(tmp_db, monkeypatch):
     monkeypatch.setenv("RENDER", "true")
+    monkeypatch.setattr(refresher, "run_once", lambda: None)      # no network in tests
     assert client.post("/api/upload", params=dict(series_id="USDZMW"), content=_csv("2020-01-01", 20)).status_code == 403
-    assert client.post("/api/refresh").status_code == 403
+    assert client.post("/api/refresh").status_code == 200          # retry is allowed: it only fetches public data
     assert client.get("/api/status").json()["controls_locked"] is True
     monkeypatch.setenv("ZTI_PASSWORD", "pw")
     hdr = {"Authorization": "Basic " + base64.b64encode(b"treasury:pw").decode()}
@@ -259,3 +260,41 @@ def test_manual_file_is_only_a_fallback_for_feed_backed_series(tmp_db, monkeypat
     monkeypatch.setattr(ingest.frankfurter_boz, "fetch", lambda: [SeriesResult("USDZMW", live, "fake live feed")])
     ingest.run_live(quiet=True)
     assert db.series_meta()["USDZMW"]["source"] == "fake live feed"                 # feed back -> feed wins
+
+
+def test_demo_endpoint_on_empty_db_then_refused_when_real_fx_exists(tmp_db):
+    assert client.get("/api/status").json()["mode"] == "empty"
+    assert client.post("/api/demo").status_code == 200
+    assert client.get("/api/status").json()["mode"] == "demo"
+    assert client.get("/api/overview").status_code == 200
+    db.clear_demo()
+    ok = client.post("/api/upload", params=dict(series_id="USDZMW", filename="a.csv"), content=_csv("2020-01-01", 60))
+    assert ok.status_code == 200
+    assert client.post("/api/demo").status_code == 409
+
+
+def test_auto_ingest_defaults(monkeypatch):
+    from app.main import _auto_ingest_enabled
+    monkeypatch.delenv("ZTI_AUTO_INGEST", raising=False)
+    monkeypatch.delenv("RENDER", raising=False)
+    assert _auto_ingest_enabled() is False
+    monkeypatch.setenv("RENDER", "true")
+    assert _auto_ingest_enabled() is True
+    monkeypatch.setenv("ZTI_AUTO_INGEST", "0")
+    assert _auto_ingest_enabled() is False
+
+
+def test_seed_files_load_offline_and_failed_live_run_keeps_demo(tmp_db, monkeypatch):
+    from app import ingest, demo_data
+    out = ingest.load_seed_files()
+    assert "POLICY_RATE" in out["ok"] and out["events"] > 0
+    assert db.data_mode() == "live"          # no USDZMW, but real rows exist
+    db.clear_demo()
+    demo_data.load()
+    def boom(): raise RuntimeError("network down")
+    monkeypatch.setattr(ingest.frankfurter_boz, "fetch", boom)
+    monkeypatch.setattr(ingest.fred, "fetch", boom)
+    monkeypatch.setattr(ingest.copper, "fetch", boom)
+    res = ingest.run_live(quiet=True)
+    assert "USDZMW" in db.series_meta() and db.series_meta()["USDZMW"]["is_demo"]
+    assert "USDZMW" in res["failed"] or "Bank of Zambia FX (via Frankfurter)" in res["failed"]

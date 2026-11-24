@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Zambia Treasury Insight</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.35.2/plotly.min.js"></script>
+<script src="/static/vendor/plotly.min.js"></script>
 <style>
 :root {
   color-scheme: light;
@@ -156,31 +156,20 @@ async function boot() {
     state.status = await api('/api/status');
     const s = state.status;
     const b = $('#banner');
-    if (s.mode === 'empty') {
+    const noFx = !s.series.some(x => x.series_id === 'USDZMW');
+    if (noFx) {
       const r = s.refresh || {};
-      if (r.enabled) {
-        const failed = !r.running && r.last_error;
-        b.innerHTML = `<div class="banner"><b>${failed ? '⚠ Data not loaded' : '⏳ Loading live data'}</b><span>${failed
-          ? esc(r.last_error) + ' The server will retry every 10 minutes. See the Data &amp; quality tab for per-source errors.'
-          : 'Fetching Bank of Zambia, FRED and copper data. This takes about a minute on first start; the page refreshes by itself.'}</span></div>`;
-        if (!failed) setTimeout(() => location.reload(), 6000);
-      } else {
-        b.innerHTML = `<div class="banner"><b>⚠ No data</b><span>Run <code>python -m app.ingest --live</code> (real data) or <code>python -m app.ingest --demo</code> (synthetic), then reload.</span></div>`;
-      }
-      return;
-    }
-    if (s.mode !== 'live') b.innerHTML = `<div class="banner"><b>⚠ DEMO DATA</b><span>The numbers on screen are synthetic and for development only. They do not describe the real kwacha, copper or Bank of Zambia. Run <code>python -m app.ingest --live</code> for real data.</span></div>`;
-    const stale = s.series.filter(x => x.stale && !x.is_demo);
-    if (stale.length) b.innerHTML += `<div class="banner"><b>⚠ Stale data</b><span>${stale.map(x => esc(x.series_id) + ' (' + x.age_days + 'd old)').join(', ')}</span></div>`;
-    if (!s.series.some(x => x.series_id === 'USDZMW')) {   // other series loaded but the exchange rate did not
-      const running = s.refresh && s.refresh.running;
-      b.innerHTML += `<div class="banner"><b>${running ? '⏳ Loading' : '⚠ No USD/ZMW data'}</b><span>${running
-        ? 'The exchange-rate feed is loading; this page refreshes by itself.'
-        : 'The exchange-rate feed did not load. The reason is listed below. Use <b>Retry now</b>, or upload a file of Bank of Zambia rates.'}</span></div>`;
+      const running = !!r.running;
+      b.innerHTML = `<div class="banner"><b>${running ? '⏳ Loading live data' : '⚠ No exchange-rate data yet'}</b><span>${running
+        ? 'Fetching Bank of Zambia, FRED and copper data (about a minute). This page refreshes by itself.'
+        : 'Use the buttons below: load live data, load demo data to explore the app, or upload a file of Bank of Zambia rates.'}</span></div>`;
       show('data');
       if (running) setTimeout(() => location.reload(), 6000);
       return;
     }
+    if (s.mode !== 'live') b.innerHTML = `<div class="banner"><b>⚠ DEMO DATA</b><span>The numbers on screen are synthetic and for development only. They do not describe the real kwacha, copper or Bank of Zambia. Open Data &amp; quality and load live data for real numbers.</span></div>`;
+    const stale = s.series.filter(x => x.stale && !x.is_demo);
+    if (stale.length) b.innerHTML += `<div class="banner"><b>⚠ Stale data</b><span>${stale.map(x => esc(x.series_id) + ' (' + x.age_days + 'd old)').join(', ')}</span></div>`;
   } catch (e) { showErr($('#banner'), e); }
   show('overview');
 }
@@ -390,11 +379,13 @@ async function dataTab() {
     const rf = s.refresh || {};
     const rfLine = rf.enabled ? `<p class="hint">Automatic refresh every ${rf.interval_hours}h. ${rf.running ? 'Running now…' : 'Last run finished ' + esc(rf.last_end || '–') + ' (UTC)'}${rf.last_failed && rf.last_failed.length ? '. <b>Failed sources:</b> ' + esc(rf.last_failed.join(', ')) : ''}.</p>` : '';
     const locked = s.controls_locked;
+    const noRealFx = !s.series.some(x => x.series_id === 'USDZMW' && !x.is_demo);
     const problems = (s.problems || []).map(p => `<tr><td>${esc(p.series_id)}</td><td><span class="tag ${p.status === 'error' ? 'bad' : ''}">${esc(p.status)}</span></td><td>${esc(p.message || '')}<br><span class="sub">${esc(p.run_at)} UTC</span></td></tr>`).join('');
     const loadCard = `<div class="card"><h2>Load data</h2>
-      ${locked ? '<div class="banner"><b>Locked</b><span>This public site has no password, so loading data from the browser is disabled. Set <code>ZTI_PASSWORD</code> in the Render dashboard (Environment), redeploy, and sign in.</span></div>' : ''}
+      ${locked ? '<div class="banner"><b>Locked</b><span>Uploads are disabled because this public site has no password. Retry and demo still work. To enable uploads set <code>ZTI_PASSWORD</code> in the Render dashboard (Environment), redeploy, and sign in.</span></div>' : ''}
       ${problems ? `<h2 style="margin-top:6px">Problems from the last load</h2><table><tr><th>Source / series</th><th>Status</th><th>What happened</th></tr>${problems}</table>` : '<p class="hint">No problems recorded from the last load.</p>'}
-      <div class="row" style="margin-top:12px"><button class="btn primary" id="rf-go" ${locked ? 'disabled' : ''}>Retry live data load now</button><span id="rf-msg" class="sub"></span></div>
+      <div class="row" style="margin-top:12px"><button class="btn primary" id="rf-go">Load live data now</button>
+        ${noRealFx ? '<button class="btn" id="demo-go">Load demo data (synthetic)</button>' : ''}<span id="rf-msg" class="sub"></span></div>
       <h2 style="margin-top:14px">Or upload a file</h2>
       <p class="hint">A CSV or Excel (.xlsx) file with a date column and a value column, for example Bank of Zambia's historical exchange rates for USD/ZMW (kwacha per dollar). New rows are merged into what is stored; the same dates are overwritten. Uploaded data is kept until the server restarts, so for permanent data also commit the file to <code>data/manual/&lt;SERIES&gt;.csv</code> in GitHub.</p>
       <div class="row"><label>Series</label><select id="up-s">${(s.registry || []).map(r => `<option value="${esc(r.series_id)}" ${r.series_id === 'USDZMW' ? 'selected' : ''}>${esc(r.series_id)} · ${esc(r.name)}</option>`).join('')}</select>
@@ -419,6 +410,11 @@ async function dataTab() {
         msg.textContent = r.running ? 'A load is already running…' : 'Loading in the background (about a minute). This page will reload.';
         setTimeout(() => location.reload(), 45000);
       } catch (e) { msg.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+    };
+    if ($('#demo-go')) $('#demo-go').onclick = async () => {
+      const msg = $('#rf-msg'); msg.textContent = 'Loading demo data…';
+      try { await api('/api/demo', { method: 'POST' }); location.reload(); }
+      catch (e) { msg.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
     };
     $('#up-go').onclick = async () => {
       const f = $('#up-f').files[0], msg = $('#up-msg');

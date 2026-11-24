@@ -29,6 +29,8 @@ class Run:
         self.failed: list[str] = []
         self.rows: list[dict] = []
         self._demo_cleared = False
+        # Demo rows are replaced only when REAL USD/ZMW has loaded in this run, so a failed refresh never wipes them.
+        self.fx_ok = False
 
     def say(self, msg: str) -> None:
         if not self.quiet:
@@ -46,6 +48,13 @@ class Run:
             return False
         m = SERIES[sid]
         if not self.dry:
+            if sid == "USDZMW":
+                self.fx_ok = True
+            meta = db.series_meta()
+            demo_present = any(v["is_demo"] for v in meta.values())
+            if demo_present and not self.fx_ok and not self._demo_cleared:
+                self._fail(sid, "kept the demo data: real USD/ZMW has not loaded in this run")
+                return False
             if not self._demo_cleared:
                 db.clear_demo()
                 self._demo_cleared = True
@@ -92,6 +101,14 @@ def load_events() -> int:
     with EVENTS_CSV.open(encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     return db.replace_events(rows, is_demo=False)
+
+
+def load_seed_files() -> dict:
+    """Load only the files shipped in the repo (no network): manual CSVs and curated events."""
+    db.init()
+    run = Run(quiet=True)
+    run.source("Seed files", manual_csv.fetch)
+    return dict(ok=run.ok, failed=run.failed, events=load_events())
 
 
 def run_live(dry: bool = False, quiet: bool = False) -> dict:

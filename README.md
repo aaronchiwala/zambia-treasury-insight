@@ -10,11 +10,13 @@ python -m app.ingest --check     # dry run: fetch + validate every source, print
 python -m app.ingest --live      # real data (needs internet)
 python -m app.ingest --demo      # OR synthetic data, clearly bannered, so everything works offline
 uvicorn app.main:app --reload    # open http://localhost:8000
-pytest                           # 65 tests
+pytest                           # 69 tests
 ```
 
-Hosting on Render: see [docs/DEPLOY_RENDER.md](docs/DEPLOY_RENDER.md). Set `ZTI_AUTO_INGEST=1` to fetch live data at
-start-up and every `ZTI_REFRESH_HOURS`; set `ZTI_PASSWORD` to require a login.
+Hosting on Render: see [docs/DEPLOY_RENDER.md](docs/DEPLOY_RENDER.md). Live data is fetched automatically at start-up and every `ZTI_REFRESH_HOURS` when running on Render
+(`ZTI_AUTO_INGEST=0` turns it off; set it to `1` to enable elsewhere). Policy rate, inflation and events load from the repo
+files at start-up even with no internet, and the Data tab has Load live / Load demo / Upload buttons, so the page is never blank.
+Set `ZTI_PASSWORD` to require a login (uploads stay locked on a public host without it).
 
 ## What's inside
 

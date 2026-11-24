@@ -38,9 +38,27 @@ def _warm_cache() -> None:
 refresher = Refresher(after=_warm_cache)
 
 
+def _auto_ingest_enabled() -> bool:
+    """On by default on Render (which sets RENDER); ZTI_AUTO_INGEST=1/0 overrides either way."""
+    v = os.environ.get("ZTI_AUTO_INGEST")
+    if v is not None:
+        return v == "1"
+    return bool(os.environ.get("RENDER"))
+
+
+def _load_seeds_if_empty() -> None:
+    """Offline start-up: policy rate, inflation and events come from files in the repo, so the DB is never blank."""
+    try:
+        if db.data_mode() == "empty":
+            ingest.load_seed_files()
+    except Exception as e:  # noqa: BLE001 - never block start-up
+        db.log_ingest("seed files", 0, "error", f"{type(e).__name__}: {e}")
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    if os.environ.get("ZTI_AUTO_INGEST") == "1":   # set on hosted deployments (see render.yaml)
+    _load_seeds_if_empty()
+    if _auto_ingest_enabled():
         refresher.start()
     yield
     refresher.stop()
@@ -152,11 +170,22 @@ def _require_controls() -> None:
 @app.post("/api/refresh")
 def refresh_now():
     """Re-run the live data load in the background (same as the automatic refresh)."""
-    _require_controls()
     if refresher.state.get("running"):
         return dict(started=False, running=True)
     threading.Thread(target=refresher.run_once, name="zti-refresh-now", daemon=True).start()
     return dict(started=True, running=False)
+
+
+@app.post("/api/demo")
+def load_demo():
+    """One-click synthetic data so the app can be explored. Refused once real USD/ZMW data exists."""
+    meta = db.series_meta().get(TARGET)
+    if meta and not meta["is_demo"]:
+        raise HTTPException(409, "Real USD/ZMW data is already loaded; demo data would only confuse it.")
+    from . import demo_data
+    out = demo_data.load()
+    _cache.clear()
+    return dict(ok=True, detail=str(out))
 
 
 @app.post("/api/upload")
