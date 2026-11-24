@@ -1,4 +1,4 @@
-"""'What if' shock analysis built on the estimated driver sensitivities (including SA spillover preset & 99% band)."""
+"""Macro and market shock analysis built on historical driver sensitivities."""
 from __future__ import annotations
 
 import numpy as np
@@ -11,7 +11,7 @@ PRESETS = {
     "copper_crash": dict(label="Copper falls 20%", shocks={"COPPER": -20.0}),
     "copper_rally": dict(label="Copper rallies 15%", shocks={"COPPER": 15.0}),
     "usd_rally": dict(label="Global dollar rallies 5%", shocks={"DXY": 5.0}),
-    "sa_spillover": dict(label="SA spillover (USD/ZAR +8%, EZA -12%, EMB -5%)", shocks={"USDZAR": 8.0, "SA_EQUITY": -12.0, "EM_BOND": -5.0}),
+    "sa_spillover": dict(label="Regional FX & EM risk-off (USD/ZAR +8%, EZA -12%, EMB -5%)", shocks={"USDZAR": 8.0, "SA_EQUITY": -12.0, "EM_BOND": -5.0}),
     "oil_spike": dict(label="Oil price spikes 30%", shocks={"BRENT": 30.0}),
     "rate_cut_100": dict(label="BoZ cuts policy rate 100bp", shocks={"POLICY_RATE": -100.0}),
     "risk_off": dict(label="Risk-off: copper -15%, dollar +4%", shocks={"COPPER": -15.0, "DXY": 4.0}),
@@ -68,7 +68,7 @@ def run_scenario(panel: Panel, shocks: dict[str, float], horizon: int = 12, wind
     if unstable:
         warn.append(
             "Regime-sensitive: the recent-window and full-history sensitivities disagree materially. "
-            "Treat the central estimate as indicative and lean on the wider 95%–99% bands."
+            "Treat the central estimate as indicative and lean on the wider risk bands."
         )
     if recent.r2 < 0.05:
         warn.append(f"Low explanatory power (R² {recent.r2:.2f}) in the recent window: sensitivities are weakly identified.")

@@ -1,9 +1,9 @@
-"""Forecasting with calibrated 50%, 95%, and 99% confidence intervals.
+"""Multi-target forecasting with calibrated empirical confidence intervals.
 
-Three direct multi-horizon models producing empirical return distributions:
-  rw      random walk: centre = last level; bands calibrated from past h-step changes with finite-sample Student-t tail guard.
-  driver  ridge regression of the h-step-ahead log change on trailing k-period driver moves
-          (copper, USD, SA Rand, SA financial markets, EM sovereign debt, rates, own momentum).
+Supports Kwacha (USD/ZMW), Overnight Interbank Yield, and Zambia Inflation (CPI YoY).
+Three direct multi-horizon models producing empirical return/change distributions:
+  rw      random walk: centre = last level; bands calibrated from past h-step changes with Student-t tail guard.
+  driver  ridge regression of the h-step-ahead move on trailing k-period driver moves + own momentum.
   blend   50/50 mix of the two.
 """
 from __future__ import annotations
@@ -13,8 +13,8 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from ..config import GROUP_LABELS, TARGET
-from .attribution import _select_common_sample
+from ..config import GROUP_LABELS, TARGET, TARGET_META
+from .attribution import _select_common_sample, resolve_target_col
 from .panel import Panel
 
 QUANTILES = (0.005, 0.025, 0.05, 0.25, 0.75, 0.95, 0.975, 0.995)
@@ -54,30 +54,36 @@ def _calibrated_quantiles(samples: np.ndarray, h: int) -> dict[float, float]:
 
 @dataclass
 class Pred:
-    mid: float  # log change, median forecast
-    q: dict[float, float]  # quantile -> log change
+    mid: float  # log change (price) or pp change (rate)
+    q: dict[float, float]  # quantile -> change
     contrib: dict[str, float] | None = None
 
 
 class ForecastContext:
-    def __init__(self, panel: Panel, k: int = 4, min_obs: int | None = None):
+    def __init__(self, panel: Panel, k: int = 4, min_obs: int | None = None, target: str = TARGET):
+        self.target = target
+        self.target_col = resolve_target_col(panel, target)
+        if self.target_col not in panel.returns.columns:
+            raise ValueError(f"Target {target} is not available at frequency {panel.freq}. Switch to Monthly (ME) for CPI.")
+        self.target_kind = panel.kinds.get(self.target_col, TARGET_META.get(target, {}).get("kind", "price"))
         if min_obs is None:
             min_obs = 104 if panel.freq == "W-FRI" else 48
         self.panel = panel
         rets = panel.returns
-        _, keep, self.excluded = _select_common_sample(rets, panel.drivers, min_obs)
+        cand = [c for c in panel.levels.columns if c != self.target_col]
+        _, keep, self.excluded = _select_common_sample(rets, cand, min_obs, target_col=self.target_col)
         self.drivers_used = keep
-        cols = [TARGET] + keep
+        cols = [self.target_col] + keep
         feats = rets[cols].rolling(k, min_periods=k).sum()
-        feats.columns = [("momentum" if c == TARGET else c) for c in cols]
+        feats.columns = [("momentum" if c == self.target_col else c) for c in cols]
         self.X = feats
         self.k = k
-        lv = panel.levels[TARGET].reindex(rets.index)
-        self.ylog = np.log(lv.values.astype(float))
+        lv = panel.levels[self.target_col].reindex(rets.index).astype(float)
+        self.ylog = np.log(lv.values) if self.target_kind == "price" else lv.values
         self.index = rets.index
         self.n = len(rets)
         self.Xv = feats.values.astype(float)
-        self.kinds = {c: ("price" if c == "momentum" else panel.kinds[c]) for c in feats.columns}
+        self.kinds = {c: (self.target_kind if c == "momentum" else panel.kinds[c]) for c in feats.columns}
 
     def _train_slice(self, t: int, h: int, window: int):
         lo = max(0, t - h - window)
@@ -92,13 +98,13 @@ class ForecastContext:
         tgt = self.ylog[s + h] - self.ylog[s]
         good = ~np.isnan(tgt)
         s, tgt = s[good], tgt[good]
+        if len(tgt) < 35:
+            raise ValueError("Not enough non-missing training horizons.")
 
-        # Random walk with finite-sample Student-t tail guard
         rw_infl = float(np.sqrt((len(tgt) + 1) / max(len(tgt) - 1, 1)))
         centered = (tgt - np.median(tgt)) * rw_infl
         rw = Pred(0.0, _calibrated_quantiles(centered, h))
 
-        # Driver Ridge model (proportional shrinkage with p)
         Xtr = self.Xv[s]
         ok = ~np.isnan(Xtr).any(axis=1)
         x_t = self.Xv[t]
@@ -120,7 +126,6 @@ class ForecastContext:
         mid = float(z_t @ beta + np.median(resid))
         drv = Pred(mid, _calibrated_quantiles(r_c, h), contrib)
 
-        # 50/50 Blend
         bl = Pred(
             0.5 * mid,
             {q: 0.5 * (rw.q[q] + drv.q[q]) for q in QUANTILES},
@@ -129,8 +134,13 @@ class ForecastContext:
         return {"rw": rw, "driver": drv, "blend": bl}
 
 
-def to_levels(last_level: float, p: Pred) -> dict:
-    f = lambda x: float(last_level * np.exp(x))
+def to_levels(last_level: float, p: Pred, kind: str = "price") -> dict:
+    if kind == "price":
+        f = lambda x: float(last_level * np.exp(x))
+        chg = float((np.exp(p.mid) - 1) * 100)
+    else:
+        f = lambda x: float(max(0.0, last_level + x))
+        chg = float(p.mid)
     return dict(
         mid=f(p.mid),
         q005=f(p.mid + p.q[0.005]),
@@ -141,7 +151,7 @@ def to_levels(last_level: float, p: Pred) -> dict:
         q95=f(p.mid + p.q[0.95]),
         q975=f(p.mid + p.q[0.975]),
         q995=f(p.mid + p.q[0.995]),
-        change_pct=float((np.exp(p.mid) - 1) * 100),
+        change_pct=chg,
     )
 
 
@@ -156,15 +166,24 @@ def select_model(summary: list[dict] | None) -> tuple[str, str]:
     best = min(avg, key=avg.get)  # type: ignore[arg-type]
     rw = avg.get("rw", np.inf)
     if best != "rw" and avg[best] < 0.99 * rw:
-        return best, f"'{best}' had the lowest average backtest error ({avg[best]:.2f}% vs {rw:.2f}% for the random walk)."
-    return "rw", "No model beat the random walk in backtests, so the centre is held flat and the 95%-99% bands carry the signal."
+        return best, f"'{best}' achieved the lowest out-of-sample backtest error ({avg[best]:.2f} vs {rw:.2f} for the random walk)."
+    return "rw", "No model beat the random walk in out-of-sample backtests, so the centre holds at spot while calibrated risk bands quantify uncertainty."
 
 
-def make_forecast(panel: Panel, h_max: int = 12, model: str = "auto", summary: list[dict] | None = None) -> dict:
-    ctx = ForecastContext(panel)
+def make_forecast(
+    panel: Panel,
+    h_max: int = 12,
+    model: str = "auto",
+    summary: list[dict] | None = None,
+    target: str = TARGET,
+) -> dict:
+    ctx = ForecastContext(panel, target=target)
     t = ctx.n - 1
-    last = float(panel.levels[TARGET].iloc[-1])
+    last = float(panel.levels[ctx.target_col].iloc[-1])
     last_date = panel.levels.index[-1]
+    meta = TARGET_META.get(target, dict(label=target, unit="", kind=ctx.target_kind))
+    is_price = ctx.target_kind == "price"
+
     if model == "auto":
         chosen, why = select_model(summary)
     elif model in MODELS:
@@ -175,7 +194,7 @@ def make_forecast(panel: Panel, h_max: int = 12, model: str = "auto", summary: l
     path, contrib_last = [], None
     for h in range(1, h_max + 1):
         preds = ctx.predict(t, h)
-        lv = to_levels(last, preds[chosen])
+        lv = to_levels(last, preds[chosen], kind=ctx.target_kind)
         lv.update(h=h, date=dates[h - 1].strftime("%Y-%m-%d"))
         path.append(lv)
         if h == h_max:
@@ -190,7 +209,7 @@ def make_forecast(panel: Panel, h_max: int = 12, model: str = "auto", summary: l
                     label="Own momentum" if name == "momentum" else GROUP_LABELS.get(name, name),
                     recent_move=raw * 100 if ctx.kinds[name] == "price" else raw,
                     unit="%" if ctx.kinds[name] == "price" else "pp",
-                    pull_pct=float((np.exp(v) - 1) * 100),
+                    pull_pct=float((np.exp(v) - 1) * 100) if is_price else float(v),
                 )
             )
 
@@ -199,32 +218,38 @@ def make_forecast(panel: Panel, h_max: int = 12, model: str = "auto", summary: l
     avg_cov95 = float(np.mean([r["coverage95"] for r in sel_rows])) if sel_rows else 0.95
     avg_cov99 = float(np.mean([r["coverage99"] for r in sel_rows])) if sel_rows else 0.99
     if 0.90 <= avg_cov95 <= 0.985 and avg_cov99 >= 0.96:
-        cal_status = f"Calibrated at 95%–99% ({avg_cov95 * 100:.1f}% on 95% CI, {avg_cov99 * 100:.1f}% on 99% CI)"
+        cal_status = f"Well calibrated ({avg_cov95 * 100:.1f}% inside 95% band, {avg_cov99 * 100:.1f}% inside 99% band)"
     elif avg_cov95 < 0.90 or avg_cov99 < 0.96:
-        cal_status = f"Slightly tight ({avg_cov95 * 100:.1f}% on 95% CI / {avg_cov99 * 100:.1f}% on 99% CI — lean on 99% tail limits)"
+        cal_status = f"Slightly tight ({avg_cov95 * 100:.1f}% inside 95% band — budget against upper tail limits)"
     else:
-        cal_status = f"Conservative / wide ({avg_cov95 * 100:.1f}% on 95% CI, {avg_cov99 * 100:.1f}% on 99% CI)"
+        cal_status = f"Conservative / wide ({avg_cov95 * 100:.1f}% inside 95% band, {avg_cov99 * 100:.1f}% inside 99% band)"
 
     up_w = terminal["q975"] - terminal["mid"]
     dn_w = terminal["mid"] - terminal["q025"]
     skew_ratio = up_w / dn_w if dn_w > 1e-6 else 1.0
     if skew_ratio > 1.2:
-        skew_label = "Upside depreciation skew (wider tail toward weaker kwacha)"
+        skew_label = f"Upside skew (wider tail toward higher {meta['label']})"
     elif skew_ratio < 0.83:
-        skew_label = "Downside appreciation skew (wider tail toward stronger kwacha)"
+        skew_label = f"Downside skew (wider tail toward lower {meta['label']})"
     else:
         skew_label = "Roughly symmetric uncertainty band"
 
     unit_word = "weeks" if panel.freq == "W-FRI" else "months"
+    val_unit = meta["unit"] if is_price else "%"
+    chg_unit = "%" if is_price else "pp"
     interp_bullets = [
-        f"Point vs. 95%–99% Confidence: Median projection at {h_max} {unit_word} ({terminal['date']}) is {terminal['mid']:.2f} ZMW/USD "
-        f"({terminal['change_pct']:+.1f}%). Plan cashflows around the 50% core ({terminal['q25']:.2f}–{terminal['q75']:.2f}), "
-        f"set standard treasury limits using the 95% CI ({terminal['q025']:.2f}–{terminal['q975']:.2f}), and stress-test against the 99% CI ({terminal['q005']:.2f}–{terminal['q995']:.2f}).",
-        f"Tail Asymmetry (95% Band): {skew_label} — +{up_w:.2f} ZMW upside tail vs -{dn_w:.2f} ZMW downside tail around median.",
+        f"Projection vs. Risk Range: Median outlook at {h_max} {unit_word} ({terminal['date']}) is {terminal['mid']:.2f} {val_unit} "
+        f"({terminal['change_pct']:+.1f}{chg_unit}). Plan operating cashflows around the 50% core ({terminal['q25']:.2f}–{terminal['q75']:.2f}), "
+        f"set treasury risk limits using the 95% band ({terminal['q025']:.2f}–{terminal['q975']:.2f}), and stress-test against the 99% band ({terminal['q005']:.2f}–{terminal['q995']:.2f}).",
+        f"Tail Asymmetry (95% Band): {skew_label} — +{up_w:.2f} upside vs -{dn_w:.2f} downside around median.",
         f"Empirical Calibration: {cal_status}.",
     ]
 
     return dict(
+        target=target,
+        target_label=meta["label"],
+        target_unit=meta["unit"],
+        target_kind=ctx.target_kind,
         model=chosen,
         model_reason=why,
         last_date=last_date.strftime("%Y-%m-%d"),

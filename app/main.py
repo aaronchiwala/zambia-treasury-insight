@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 from . import db, events_derived, ingest, upload as upload_mod
 from .analytics import attribution, backtest, forecast, history, scenario
 from .analytics.panel import DataError, build_panel
-from .config import GROUP_LABELS, SERIES, TARGET
+from .config import GROUP_LABELS, SERIES, TARGET, TARGET_META
 from .scheduler import Refresher
 from .validate import summarize, validate_series
 
@@ -32,10 +32,16 @@ STATIC = Path(__file__).resolve().parent.parent / "static"
 db.init()
 _cache: dict = {}
 
+DISPLAY_ORDER = [
+    "USDZMW", "ZARZMW", "EURZMW", "GBPZMW", "USDZAR", "DXY",
+    "POLICY_RATE", "ON_INTERBANK", "CPI_YOY", "TBILL_91D", "TBILL_364D", "BOND_5Y", "US10Y", "SA_10Y", "SA_3M_RATE",
+    "COPPER_USD", "COPPER_USD_M", "BRENT_USD", "VIX", "SA_EQUITY", "EM_BOND", "RESERVES_USD",
+]
+
 
 def _warm_cache() -> None:
     """After a data refresh, precompute the (slow) backtest so the first Forecast click is instant."""
-    _backtest("W-FRI", (1, 4, 8, 12), 2)
+    _backtest("W-FRI", (1, 4, 8, 12), 2, TARGET)
 
 
 refresher = Refresher(after=_warm_cache)
@@ -123,8 +129,8 @@ def _panel(freq: str):
 
 
 @cached
-def _backtest(freq: str, horizons: tuple, step: int):
-    return backtest.run_backtest(_panel(freq), horizons=horizons, step=step)
+def _backtest(freq: str, horizons: tuple, step: int, target: str = TARGET):
+    return backtest.run_backtest(_panel(freq), horizons=horizons, step=step, target=target)
 
 
 @app.get("/api/status")
@@ -250,6 +256,8 @@ async def upload_series(
         notes=f"Uploaded by a user; value column {info['value_column']!r}.",
     )
     db.log_ingest(series_id, n, status_str, msg or f"uploaded {info['rows']} rows from {filename or 'file'}")
+    if series_id in ("USDZMW", "USDZAR", "EURUSD", "GBPUSD"):
+        ingest.compute_cross_rates(quiet=True)
     if not db.load_events(is_demo=False):
         ingest.load_events()
     _cache.clear()
@@ -373,6 +381,7 @@ def overview():
                 name=m["name"],
                 unit=m["unit"],
                 kind=SERIES[sid]["kind"],
+                category=SERIES.get(sid, {}).get("category", "macro"),
                 last=last,
                 date=s.index[-1].strftime("%Y-%m-%d"),
                 chg_1w=chg(7),
@@ -382,12 +391,19 @@ def overview():
                 is_demo=bool(m["is_demo"]),
             )
         )
-    sorted_cards = sorted(cards, key=lambda c: (c["series_id"] != TARGET, c["series_id"]))
+    rank = {sid: i for i, sid in enumerate(DISPLAY_ORDER)}
+    sorted_cards = sorted(cards, key=lambda c: (rank.get(c["series_id"], 999), c["series_id"]))
     return dict(
         cards=sorted_cards,
         mode=db.data_mode(),
         interpretation=_compute_overview_interpretation(sorted_cards),
     )
+
+
+@app.get("/api/treasury-signals")
+def treasury_signals():
+    p = _panel("W-FRI")
+    return attribution.compute_treasury_signals(p, db.load_series)
 
 
 @app.get("/api/series")
@@ -420,10 +436,13 @@ def events():
 
 
 @app.get("/api/explain")
-def explain(start: str, end: str, freq: str = "W-FRI", window: int | None = None):
-    p = _panel(freq)
+def explain(start: str, end: str, freq: str = "W-FRI", window: int | None = None, target: str = TARGET):
+    if target not in TARGET_META:
+        raise HTTPException(422, f"Unsupported target {target!r}.")
+    eff_freq = "ME" if target == "CPI_YOY" else freq
+    p = _panel(eff_freq)
     try:
-        fit = attribution.fit_driver_model(p, window=window)
+        fit = attribution.fit_driver_model(p, window=window, target=target, with_dynamics=True)
         res = attribution.explain_period(p, fit, start, end, _events_for_mode())
     except ValueError as e:
         raise HTTPException(422, str(e))
@@ -470,20 +489,24 @@ def model_summary(freq: str = "W-FRI", window: int | None = None):
 
 
 @app.get("/api/backtest")
-def get_backtest(freq: str = "W-FRI", horizons: str = "1,4,8,12", step: int | None = None):
+def get_backtest(freq: str = "W-FRI", horizons: str = "1,4,8,12", step: int | None = None, target: str = TARGET):
     hs = tuple(int(x) for x in horizons.split(",") if x.strip())
-    st = step if step is not None else (2 if freq == "W-FRI" else 1)
-    return _backtest(freq, hs, st)
+    eff_freq = "ME" if target == "CPI_YOY" else freq
+    st = step if step is not None else (2 if eff_freq == "W-FRI" else 1)
+    return _backtest(eff_freq, hs, st, target)
 
 
 @app.get("/api/forecast")
-def get_forecast(h: int = Query(12, ge=1, le=26), model: str = "auto", freq: str = "W-FRI"):
-    p = _panel(freq)
+def get_forecast(h: int = Query(12, ge=1, le=26), model: str = "auto", freq: str = "W-FRI", target: str = TARGET):
+    if target not in TARGET_META:
+        raise HTTPException(422, f"Unsupported target {target!r}.")
+    eff_freq = "ME" if target == "CPI_YOY" else freq
+    p = _panel(eff_freq)
     hs = tuple(sorted({1, 4, 8, 12} | {min(h, 12)}))
-    st = 2 if freq == "W-FRI" else 1
-    bt = _backtest(freq, hs, st)
+    st = 2 if eff_freq == "W-FRI" else 1
+    bt = _backtest(eff_freq, hs, st, target)
     try:
-        f = forecast.make_forecast(p, h, model, bt["summary"])
+        f = forecast.make_forecast(p, h, model, bt["summary"], target=target)
     except ValueError as e:
         raise HTTPException(422, str(e))
     f["backtest_summary"] = list(bt["summary"])

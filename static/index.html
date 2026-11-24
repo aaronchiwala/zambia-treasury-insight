@@ -84,7 +84,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 <header>
   <div class="top">
     <h1>Zambia Treasury Insight</h1>
-    <span class="sub">USD/ZMW drivers, South African spillovers, 95%–99% confidence intervals &amp; backtest track record.</span>
+    <span class="sub">Live USD/ZMW, Bank of Zambia rates, copper &amp; macro decision support.</span>
     <span class="spacer"></span>
     <button class="btn" id="theme" title="Toggle light / dark">Theme</button>
   </div>
@@ -115,7 +115,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const fmt = (x, d = 2) => (x === null || x === undefined || isNaN(x)) ? '–' : Number(x).toLocaleString('en-US', {minimumFractionDigits: d, maximumFractionDigits: d});
 const sgn = (x, d = 1) => (x === null || x === undefined || isNaN(x)) ? '–' : (x > 0 ? '+' : x < 0 ? '−' : '') + Math.abs(x).toFixed(d);
-const state = { tab: 'overview', range: '3Y', compare: '', freq: 'W-FRI', fcH: 12, fcModel: 'auto', status: null, lastDate: null, rendered: {} };
+const state = { tab: 'overview', range: '3Y', compare: '', cat: 'all', freq: 'W-FRI', exTarget: 'USDZMW', fcTarget: 'USDZMW', fcH: 12, fcModel: 'auto', status: null, lastDate: null, rendered: {} };
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -179,27 +179,35 @@ async function overview() {
   const el = $('#tab-overview');
   el.innerHTML = '<p class="hint">Loading…</p>';
   try {
-    const [ov, ev] = await Promise.all([api('/api/overview'), api('/api/events')]);
+    const [ov, ev, sig] = await Promise.all([api('/api/overview'), api('/api/events'), api('/api/treasury-signals').catch(() => null)]);
     state.lastDate = ov.cards.find(c => c.series_id === 'USDZMW')?.date;
-    const cards = ov.cards.map(c => {
+    const filteredCards = ov.cards.filter(c => state.cat === 'all' || (c.category || 'macro') === state.cat);
+    const cards = filteredCards.map(c => {
       const u = c.kind === 'rate' ? 'pp' : '%';
       const dd = (l, v) => `<span>${l} ${sgn(v, c.kind === 'rate' ? 2 : 1)}${v == null ? '' : u}</span>`;
       return `<div class="stat"><div class="n">${esc(c.name)}</div><div class="v">${fmt(c.last, c.last > 1000 ? 0 : 2)}</div>
         <div class="d">${dd('1w', c.chg_1w)}${dd('4w', c.chg_4w)}${dd('52w', c.chg_52w)}</div>
         <div class="d"><span>${esc(c.unit)} · ${c.date}</span></div></div>`;
     }).join('');
+    const catBar = `<div class="row" style="margin-bottom:10px"><label>Market Watchlist</label>${[['all','All Markets'],['fx','FX Pairs'],['rates','Zambia Rates & CPI'],['macro','Copper & Global']].map(([k,l])=>`<button class="btn ${state.cat===k?'sel':''}" data-cat="${k}">${l}</button>`).join('')}</div>`;
+    const sigCard = sig ? `<div class="card"><h2>Treasury &amp; FX Decision Guidance — ${esc(sig.bias_label)} (${sig.counts.appreciation} Appreciation · ${sig.counts.neutral} Neutral · ${sig.counts.depreciation} Depreciation)</h2>
+      <p class="hint">${esc(sig.summary)}</p>
+      <table><tr><th>Macro / Market Pillar</th><th>Signal</th><th>Reading</th><th>Watch Trigger</th></tr>
+      ${sig.signals.map(s => `<tr><td><b>${esc(s.pillar)}</b><br><span class="sub">${esc(s.detail)}</span></td><td style="color:${s.stance==='depreciation'?'var(--weak)':s.stance==='appreciation'?'var(--strong)':'var(--ink2)'};font-weight:600">${esc(s.stance_label)}</td><td>${esc(s.reading)}</td><td><span class="sub">${esc(s.watch_trigger)}</span></td></tr>`).join('')}</table>
+      <div class="grid" style="margin-top:12px;margin-bottom:0">${sig.playbooks.map(p => `<div class="stat"><div class="n"><b>${esc(p.audience)}</b></div><div style="font-size:13px;font-weight:600;margin:4px 0">${esc(p.posture)}</div><ul class="story" style="padding-left:16px;margin:6px 0 0;font-size:12px">${p.steps.map(st=>`<li>${esc(st)}</li>`).join('')}</ul></div>`).join('')}</div></div>` : '';
     const ip = ov.interpretation;
-    const interpCard = ip ? `<div class="card"><h2>Trend &amp; Regime Interpretation</h2>
+    const interpCard = ip ? `<div class="card"><h2>Trend &amp; Volatility Monitor</h2>
       <p class="hint">${esc(ip.trend_label)}${ip.ma12w ? ` · 12w MA ${fmt(ip.ma12w)}` : ''}${ip.ma26w ? ` · 26w MA ${fmt(ip.ma26w)}` : ''}${ip.vol12w_ann_pct ? ` · 12w Ann. Vol ${fmt(ip.vol12w_ann_pct, 1)}%` : ''}</p>
       <ul class="story">${ip.bullets.map(b => `<li>${esc(b)}</li>`).join('')}</ul></div>` : '';
     const opts = ov.cards.filter(c => c.series_id !== 'USDZMW').map(c => `<option value="${c.series_id}" ${state.compare === c.series_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
-    el.innerHTML = `<div class="grid">${cards}</div>${interpCard}
+    el.innerHTML = `${catBar}<div class="grid">${cards}</div>${sigCard}${interpCard}
       <div class="card"><h2>USD/ZMW with key events</h2>
       <p class="hint">Higher = weaker kwacha. Hover event markers or compare against Copper, USD/ZAR, SA Equity (EZA), or Global USD (DXY) rebased to 100.</p>
       <div class="row">${['1Y','3Y','5Y','10Y','ALL'].map(r => `<button class="btn ${state.range === r ? 'sel' : ''}" data-r="${r}">${r}</button>`).join('')}
         <label>Compare with</label><select id="cmp"><option value="">— none —</option>${opts}</select></div>
       <div class="legend" id="ov-legend"></div>
       <div id="ov-chart" class="chart"></div></div>`;
+    el.querySelectorAll('[data-cat]').forEach(b => b.onclick = () => { state.cat = b.dataset.cat; state.rendered.overview = false; show('overview'); });
     el.querySelectorAll('[data-r]').forEach(b => b.onclick = () => { state.range = b.dataset.r; state.rendered.overview = false; show('overview'); });
     $('#cmp').onchange = e => { state.compare = e.target.value; drawOverview(ev.events); };
     drawOverview(ev.events);
@@ -238,9 +246,10 @@ async function explain() {
   const ev = (await api('/api/events')).events;
   const end = state.lastDate || new Date().toISOString().slice(0, 10);
   const d0 = new Date(end); d0.setDate(d0.getDate() - 182);
-  el.innerHTML = `<div class="card"><h2>Pick a window; get a data-backed explanation</h2>
-    <p class="hint">Newey-West HAC regression attributes moves across Copper, USD, South African markets (USD/ZAR, EZA, SA 10Y/3M), EM Bonds, Oil, Yields, and Policy Rate.</p>
-    <div class="row"><label>From</label><input type="date" id="ex-s" value="${d0.toISOString().slice(0, 10)}"><label>To</label><input type="date" id="ex-e" value="${end}">
+  el.innerHTML = `<div class="card"><h2>Historical Driver Attribution</h2>
+    <p class="hint">Dynamic Newey-West HAC regression combining contemporaneous shocks, 1-period lagged external transmission, and long-run fair-value reversion.</p>
+    <div class="row"><label>Target</label><select id="ex-tg"><option value="USDZMW" ${state.exTarget==='USDZMW'?'selected':''}>Kwacha (USD/ZMW)</option><option value="ON_INTERBANK" ${state.exTarget==='ON_INTERBANK'?'selected':''}>Interbank Yield (%)</option><option value="CPI_YOY" ${state.exTarget==='CPI_YOY'?'selected':''}>Inflation (CPI YoY %)</option></select>
+      <label>From</label><input type="date" id="ex-s" value="${d0.toISOString().slice(0, 10)}"><label>To</label><input type="date" id="ex-e" value="${end}">
       <label>Frequency</label><select id="ex-fq"><option value="W-FRI" ${state.freq==='W-FRI'?'selected':''}>Weekly</option><option value="ME" ${state.freq==='ME'?'selected':''}>Monthly (incl. CPI &amp; SA yields)</option></select>
       <button class="btn primary" id="ex-go">Explain</button>
       <button class="btn" data-m="3">3m</button><button class="btn" data-m="6">6m</button><button class="btn" data-m="12">12m</button><button class="btn" data-m="36">3y</button></div>
@@ -248,6 +257,7 @@ async function explain() {
     <div class="evlist">${ev.slice(-14).map(e => `<button class="btn" data-ev="${esc(e.date)}" title="${esc(e.title)}">${esc(e.date)} · ${esc(e.title.slice(0, 36))}</button>`).join('') || '<span class="hint">No events loaded.</span>'}</div></div>
     <div id="ex-out"></div>`;
   $('#ex-go').onclick = runExplain;
+  $('#ex-tg').onchange = e => { state.exTarget = e.target.value; if (state.exTarget === 'CPI_YOY') { state.freq = 'ME'; $('#ex-fq').value = 'ME'; } runExplain(); };
   $('#ex-fq').onchange = e => { state.freq = e.target.value; runExplain(); };
   el.querySelectorAll('[data-m]').forEach(b => b.onclick = () => { const e = new Date($('#ex-e').value); e.setMonth(e.getMonth() - +b.dataset.m); $('#ex-s').value = e.toISOString().slice(0, 10); runExplain(); });
   el.querySelectorAll('[data-ev]').forEach(b => b.onclick = () => {
@@ -259,48 +269,53 @@ async function explain() {
 async function runExplain() {
   const out = $('#ex-out'); out.innerHTML = '<p class="hint">Analysing…</p>';
   try {
-    const r = await api(`/api/explain?start=${$('#ex-s').value}&end=${$('#ex-e').value}&freq=${state.freq}`);
+    const r = await api(`/api/explain?start=${$('#ex-s').value}&end=${$('#ex-e').value}&freq=${state.freq}&target=${state.exTarget}`);
     const items = r.drivers.map(d => ({ label: d.label + (d.significant ? '' : ' (n.s.)'), v: d.contribution_pp }));
     items.push({ label: 'Baseline drift', v: r.drift_pp }, { label: 'Unexplained', v: r.unexplained_pp });
     items.sort((a, b) => Math.abs(a.v) - Math.abs(b.v));
     const total = r.log_change_pp;
     const rc = r.regime_comparison;
-    out.innerHTML = `<div class="two"><div class="card"><h2>${sgn(r.change_pct)}% &nbsp;<span class="sub">USD/ZMW ${fmt(r.level_start)} → ${fmt(r.level_end)} · ${r.start} to ${r.end}</span></h2>
+    const isFx = r.target === 'USDZMW';
+    const unitChg = isFx ? '%' : 'pp';
+    out.innerHTML = `<div class="two"><div class="card"><h2>${sgn(r.change_pct, isFx ? 1 : 2)}${unitChg} &nbsp;<span class="sub">${esc(r.target_label)} ${fmt(r.level_start)} → ${fmt(r.level_end)} · ${r.start} to ${r.end}</span></h2>
         <ul class="story">${r.narrative.map(n => `<li>${esc(n)}</li>`).join('')}</ul></div>
-      <div class="card"><h2>What contributed (percentage points)</h2><p class="hint">Contributions sum to the total move (${sgn(total)}pp in log terms). Red = weaker kwacha, blue = stronger.</p>
-        <div class="legend"><span><i style="background:var(--weak)"></i>Pushed USD/ZMW up (weaker kwacha)</span><span><i style="background:var(--strong)"></i>Pushed it down (stronger kwacha)</span></div>
+      <div class="card"><h2>Driver Contributions (pp)</h2><p class="hint">Contributions sum to the total move (${sgn(total)}pp). Red = upward push, blue = downward push.</p>
+        <div class="legend"><span><i style="background:var(--weak)"></i>${isFx ? 'Pushed USD/ZMW up (weaker kwacha)' : 'Lifted rate / inflation'}</span><span><i style="background:var(--strong)"></i>${isFx ? 'Pushed it down (stronger kwacha)' : 'Lowered rate / inflation'}</span></div>
         <div id="ex-bars" class="chart short"></div></div></div>
       <div class="two">${r.interpretation_guide ? `<div class="card"><h2>How to Interpret Attribution Results</h2><ul class="story">${r.interpretation_guide.map(g => `<li>${esc(g)}</li>`).join('')}</ul></div>` : ''}
         ${rc ? `<div class="card"><h2>Regime Check: ${esc(rc.label)} (R² ${fmt(rc.r2)}, n=${rc.n})</h2><table><tr><th>Top Post-2022 Driver</th><th class="num">Regime β</th><th class="num">p-value</th></tr>
           ${rc.top_drivers.map(d => `<tr><td>${esc(d.label)}</td><td class="num">${fmt(d.beta, 3)}</td><td class="num">${d.p_value < 0.001 ? '&lt;0.001' : fmt(d.p_value, 3)}${d.p_value < 0.01 ? ' **' : d.p_value < 0.05 ? ' *' : ''}</td></tr>`).join('')}</table></div>` : ''}</div>
-      <div class="card"><h2>USD/ZMW in and around the window</h2><div id="ex-line" class="chart short"></div></div>
+      <div class="card"><h2>${esc(r.target_label)} in and around the window</h2><div id="ex-line" class="chart short"></div></div>
       <div class="two"><div class="card"><h2>Driver detail</h2><table><tr><th>Driver</th><th class="num">Move</th><th class="num">Sensitivity β</th><th class="num">Contribution</th><th>Conf.</th></tr>
         ${r.drivers.map(d => `<tr><td>${esc(d.label)}</td><td class="num">${sgn(d.driver_move)}${d.driver_move_unit}</td><td class="num">${fmt(d.beta, 3)}</td><td class="num">${sgn(d.contribution_pp)}pp</td><td>${d.p_value < 0.01 ? '99% **' : d.significant ? '95% *' : 'n.s.'}</td></tr>`).join('')}</table>
         <p class="hint">** = 99% confidence (p &lt; 0.01); * = 95% confidence (p &lt; 0.05).</p></div>
       <div class="card"><h2>Biggest single periods</h2><table><tr><th>Period ending</th><th class="num">Move</th><th>Lined up with</th></tr>
-        ${r.top_periods.map(p => `<tr><td>${p.date}</td><td class="num">${sgn(p.move_pct)}%</td><td>${esc(p.dominant_driver)}${p.events.length ? '<br><span class="tag">event</span> ' + esc(p.events.join('; ')) : ''}</td></tr>`).join('')}</table>
-        ${r.shocks && r.shocks.length ? `<h2 style="margin-top:14px">Largest unexplained shocks (all history)</h2><table>${r.shocks.slice(-6).map(s => `<tr><td>${s.date}</td><td class="num">${sgn(s.unexplained_pct)}%</td><td>${esc(s.events.join('; ') || 'no event on file')}</td></tr>`).join('')}</table>` : ''}</div></div>`;
+        ${r.top_periods.map(p => `<tr><td>${p.date}</td><td class="num">${sgn(p.move_pct)}${unitChg}</td><td>${esc(p.dominant_driver)}${p.events.length ? '<br><span class="tag">event</span> ' + esc(p.events.join('; ')) : ''}</td></tr>`).join('')}</table>
+        ${r.shocks && r.shocks.length ? `<h2 style="margin-top:14px">Largest idiosyncratic shocks</h2><table>${r.shocks.slice(-6).map(s => `<tr><td>${s.date}</td><td class="num">${sgn(s.unexplained_pct)}${unitChg}</td><td>${esc(s.events.join('; ') || 'no event on file')}</td></tr>`).join('')}</table>` : ''}</div></div>`;
     Plotly.react('ex-bars', [{ type: 'bar', orientation: 'h', x: items.map(i => i.v), y: items.map(i => i.label),
       marker: { color: items.map(i => i.v > 0 ? css('--weak') : css('--strong')) }, text: items.map(i => sgn(i.v) + 'pp'), textposition: 'outside', cliponaxis: false, hoverinfo: 'skip' }],
       layout({ margin: { l: 170, r: 50, t: 6, b: 30 }, hovermode: 'closest', xaxis: { gridcolor: css('--grid'), zeroline: true, zerolinecolor: css('--axis'), title: 'pp' } }), cfg);
     const pad = 91, a = new Date(r.start), z = new Date(r.end); a.setDate(a.getDate() - pad); z.setDate(z.getDate() + pad);
-    const s = await api(`/api/series?ids=USDZMW&start=${a.toISOString().slice(0, 10)}&end=${z.toISOString().slice(0, 10)}`);
-    const evs = (await api('/api/events')).events.filter(e => e.date >= s.USDZMW.dates[0] && e.date <= s.USDZMW.dates.at(-1));
-    Plotly.react('ex-line', [{ x: s.USDZMW.dates, y: s.USDZMW.values, type: 'scatter', mode: 'lines', line: { color: css('--s1'), width: 2 }, name: 'USD/ZMW' }],
+    const s = await api(`/api/series?ids=${state.exTarget}&start=${a.toISOString().slice(0, 10)}&end=${z.toISOString().slice(0, 10)}`);
+    const ts = s[state.exTarget];
+    const evs = (await api('/api/events')).events.filter(e => e.date >= ts.dates[0] && e.date <= ts.dates.at(-1));
+    Plotly.react('ex-line', [{ x: ts.dates, y: ts.values, type: 'scatter', mode: 'lines', line: { color: css('--s1'), width: 2 }, name: r.target_label }],
       layout({ shapes: [{ type: 'rect', xref: 'x', yref: 'paper', x0: r.start, x1: r.end, y0: 0, y1: 1, fillcolor: css('--s1'), opacity: .08, line: { width: 0 } }].concat(evs.map(e => ({ type: 'line', xref: 'x', yref: 'paper', x0: e.date, x1: e.date, y0: 0, y1: 1, line: { color: css('--muted'), width: 1, dash: 'dot' } }))),
         annotations: evs.map(e => ({ x: e.date, y: 1, yref: 'paper', text: esc(e.title.slice(0, 26)), showarrow: false, textangle: -90, xanchor: 'right', yanchor: 'top', font: { size: 10, color: css('--muted') } })) }), cfg);
   } catch (e) { showErr(out, e); }
 }
 
-/* ---------- forecast (50%, 95% & 99% CIs) ---------- */
+/* ---------- forecast ---------- */
 async function forecast() {
   const el = $('#tab-forecast');
-  el.innerHTML = `<div class="card"><h2>Forecast with 95%–99% Empirical Confidence Intervals</h2>
-    <p class="hint">Out-of-sample rolling backtests verify empirical coverage across 50% core, 95% risk, and 99% extreme tail bands.</p>
-    <div class="row"><label>Frequency</label><select id="fc-fq"><option value="W-FRI" ${state.freq==='W-FRI'?'selected':''}>Weekly</option><option value="ME" ${state.freq==='ME'?'selected':''}>Monthly</option></select>
+  el.innerHTML = `<div class="card"><h2>Macro &amp; FX Outlook with Calibrated Risk Ranges</h2>
+    <p class="hint">Projections for USD/ZMW, Overnight Interbank Yield, and ZamStats Inflation validated via rolling out-of-sample backtests.</p>
+    <div class="row"><label>Target</label><select id="fc-tg"><option value="USDZMW" ${state.fcTarget==='USDZMW'?'selected':''}>Kwacha (USD/ZMW)</option><option value="ON_INTERBANK" ${state.fcTarget==='ON_INTERBANK'?'selected':''}>Interbank Yield (%)</option><option value="CPI_YOY" ${state.fcTarget==='CPI_YOY'?'selected':''}>Inflation (CPI YoY %)</option></select>
+      <label>Frequency</label><select id="fc-fq"><option value="W-FRI" ${state.freq==='W-FRI'?'selected':''}>Weekly</option><option value="ME" ${state.freq==='ME'?'selected':''}>Monthly</option></select>
       <label>Horizon</label><select id="fc-h">${[4, 8, 12, 26].map(h => `<option ${h == state.fcH ? 'selected' : ''}>${h}</option>`).join('')}</select>
       <label>Model</label><select id="fc-m">${[['auto', 'Auto (best in backtest)'], ['rw', 'Random walk'], ['driver', 'Drivers'], ['blend', 'Blend']].map(([v, l]) => `<option value="${v}" ${v == state.fcModel ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     <div id="fc-out"><p class="hint">Fitting and backtesting…</p></div></div>`;
+  $('#fc-tg').onchange = e => { state.fcTarget = e.target.value; if (state.fcTarget === 'CPI_YOY') { state.freq = 'ME'; $('#fc-fq').value = 'ME'; } runForecast(); };
   $('#fc-fq').onchange = e => { state.freq = e.target.value; runForecast(); };
   $('#fc-h').onchange = e => { state.fcH = +e.target.value; runForecast(); };
   $('#fc-m').onchange = e => { state.fcModel = e.target.value; runForecast(); };
@@ -309,37 +324,39 @@ async function forecast() {
 async function runForecast() {
   const out = $('#fc-out');
   try {
-    const f = await api(`/api/forecast?h=${state.fcH}&model=${state.fcModel}&freq=${state.freq}`);
-    const lookDays = state.freq === 'W-FRI' ? 365 : 730;
-    const hist = await api(`/api/series?ids=USDZMW&start=${new Date(new Date(f.last_date).getTime() - lookDays * 864e5).toISOString().slice(0, 10)}`);
+    const f = await api(`/api/forecast?h=${state.fcH}&model=${state.fcModel}&freq=${state.freq}&target=${state.fcTarget}`);
+    const lookDays = f.freq === 'W-FRI' ? 365 : 730;
+    const hist = await api(`/api/series?ids=${f.target}&start=${new Date(new Date(f.last_date).getTime() - lookDays * 864e5).toISOString().slice(0, 10)}`);
+    const hs = hist[f.target];
     const P = f.path, d = P.map(p => p.date);
     const rgba = (v, a) => { const c = css(v); return c.startsWith('#') ? `rgba(${parseInt(c.slice(1, 3), 16)},${parseInt(c.slice(3, 5), 16)},${parseInt(c.slice(5, 7), 16)},${a})` : c; };
     const band = (lo, hi, a, name) => [{ x: d, y: P.map(p => p[lo]), mode: 'lines', line: { width: 0 }, hoverinfo: 'skip', showlegend: false },
       { x: d, y: P.map(p => p[hi]), mode: 'lines', line: { width: 0 }, fill: 'tonexty', fillcolor: rgba('--s1', a), name, hoverinfo: 'skip' }];
-    const tr = [{ x: hist.USDZMW.dates, y: hist.USDZMW.values, mode: 'lines', line: { color: css('--s1'), width: 2 }, name: 'USD/ZMW', hovertemplate: '%{y:.3f}' },
-      ...band('q005', 'q995', .08, '99% CI'), ...band('q025', 'q975', .16, '95% CI'), ...band('q25', 'q75', .30, '50% core'),
+    const tr = [{ x: hs.dates, y: hs.values, mode: 'lines', line: { color: css('--s1'), width: 2 }, name: f.target_label, hovertemplate: '%{y:.3f}' },
+      ...band('q005', 'q995', .08, '99% tail'), ...band('q025', 'q975', .16, '95% risk'), ...band('q25', 'q75', .30, '50% core'),
       { x: [f.last_date].concat(d), y: [f.last_level].concat(P.map(p => p.mid)), mode: 'lines', line: { color: css('--s1'), width: 2, dash: 'dash' }, name: 'Median', hovertemplate: '%{y:.3f}' }];
     const L = P.at(-1);
     const sel = f.backtest_summary.filter(r => r.model === f.model);
     const sk = sel.length ? sel.reduce((a, r) => a + (r.skill_vs_rw || 0), 0) / sel.length : 0;
-    const u = state.freq === 'W-FRI' ? 'w' : 'm';
+    const u = f.freq === 'W-FRI' ? 'w' : 'm';
+    const chgU = f.target_kind === 'price' ? '%' : 'pp';
     const verdict = f.model === 'rw' || sk <= 0.005
-      ? `<b>Benchmark Verdict:</b> No demonstrated directional edge over random walk; centre stays flat and the 95%–99% quantile bands carry the risk range.`
+      ? `<b>Benchmark Verdict:</b> Centre holds near spot while empirical quantile bands carry the treasury risk range.`
       : `<b>Benchmark Verdict:</b> ${(sk * 100).toFixed(1)}% lower out-of-sample MAE than random walk in rolling backtests.`;
-    out.innerHTML = `<div class="legend"><span><i style="background:var(--s1)"></i>History &amp; median</span><span><i style="background:${rgba('--s1', .30)}"></i>50% core</span><span><i style="background:${rgba('--s1', .16)}"></i>95% CI</span><span><i style="background:${rgba('--s1', .08)}"></i>99% CI</span></div>
+    out.innerHTML = `<div class="legend"><span><i style="background:var(--s1)"></i>History &amp; median</span><span><i style="background:${rgba('--s1', .30)}"></i>50% core</span><span><i style="background:${rgba('--s1', .16)}"></i>95% risk band</span><span><i style="background:${rgba('--s1', .08)}"></i>99% tail stress</span></div>
       <div id="fc-chart" class="chart"></div>
       <div class="verdict">${verdict}<br><span class="sub">Active model: <b>${esc(f.model)}</b> · ${esc(f.model_reason)}</span></div>
       <div class="grid"><div class="stat"><div class="n">Latest (${f.last_date})</div><div class="v">${fmt(f.last_level)}</div></div>
-        <div class="stat"><div class="n">Median (${f.horizon}${u})</div><div class="v">${fmt(L.mid)}</div><div class="d">${sgn(L.change_pct)}% · 50% core ${fmt(L.q25)}–${fmt(L.q75)}</div></div>
-        <div class="stat"><div class="n">95% Confidence Interval</div><div class="v" style="font-size:20px">${fmt(L.q025)} – ${fmt(L.q975)}</div></div>
-        <div class="stat"><div class="n">99% Confidence Interval</div><div class="v" style="font-size:20px">${fmt(L.q005)} – ${fmt(L.q995)}</div></div></div>
+        <div class="stat"><div class="n">Median (${f.horizon}${u})</div><div class="v">${fmt(L.mid)}</div><div class="d">${sgn(L.change_pct)}${chgU} · 50% core ${fmt(L.q25)}–${fmt(L.q75)}</div></div>
+        <div class="stat"><div class="n">95% Risk Band</div><div class="v" style="font-size:20px">${fmt(L.q025)} – ${fmt(L.q975)}</div></div>
+        <div class="stat"><div class="n">99% Tail Stress Band</div><div class="v" style="font-size:20px">${fmt(L.q005)} – ${fmt(L.q995)}</div></div></div>
       ${f.interpretation ? `<div class="verdict"><b>How to Interpret:</b> ${esc(f.interpretation.calibration_status)} · ${esc(f.interpretation.band_skew_label)}<ul class="story" style="margin-top:6px">${f.interpretation.bullets.map(b => `<li>${esc(b)}</li>`).join('')}</ul></div>` : ''}
-      ${f.drivers.length ? `<h2>Driver Momentum Inputs (${f.horizon}${u}, ${f.lookback_periods}-period lookback)</h2><table><tr><th>Input</th><th class="num">Recent move</th><th class="num">Pull on USD/ZMW</th></tr>${f.drivers.map(x => `<tr><td>${esc(x.label)}</td><td class="num">${sgn(x.recent_move)}${x.unit}</td><td class="num">${sgn(x.pull_pct, 2)}%</td></tr>`).join('')}</table>` : ''}
+      ${f.drivers.length ? `<h2>Driver Momentum Inputs (${f.horizon}${u}, ${f.lookback_periods}-period lookback)</h2><table><tr><th>Input</th><th class="num">Recent move</th><th class="num">Pull on ${esc(f.target_label)}</th></tr>${f.drivers.map(x => `<tr><td>${esc(x.label)}</td><td class="num">${sgn(x.recent_move)}${x.unit}</td><td class="num">${sgn(x.pull_pct, 2)}${chgU}</td></tr>`).join('')}</table>` : ''}
       <h2 style="margin-top:16px">Rolling-Origin Backtest Calibration</h2>
       <p class="hint">95% cover should track ~95% and 99% cover should track ~98%–99% out-of-sample.</p>
       <table><tr><th>Horizon</th><th>Model</th><th class="num">MAE</th><th class="num">Skill vs RW</th><th class="num">DM t-stat</th><th class="num">Dir hit</th><th class="num">95% cover</th><th class="num">99% cover</th><th class="num">50% cover</th><th class="num">Origins</th></tr>
-      ${f.backtest_summary.sort((a, b) => a.h - b.h || ['rw', 'driver', 'blend'].indexOf(a.model) - ['rw', 'driver', 'blend'].indexOf(b.model)).map(r => `<tr><td>${r.h}${u}</td><td>${r.model}</td><td class="num">${fmt(r.mae_pct)}%</td><td class="num">${r.model === 'rw' ? '–' : sgn(r.skill_vs_rw * 100, 1) + '%'}</td><td class="num">${r.dm_t == null ? '–' : fmt(r.dm_t, 1)}</td><td class="num">${r.direction_hit == null ? '–' : (r.direction_hit * 100).toFixed(0) + '%'}</td><td class="num">${(r.coverage95 * 100).toFixed(1)}%</td><td class="num">${(r.coverage99 * 100).toFixed(1)}%</td><td class="num">${(r.coverage50 * 100).toFixed(0)}%</td><td class="num">${r.n}</td></tr>`).join('')}</table>`;
-    Plotly.react('fc-chart', tr, layout({ yaxis: { gridcolor: css('--grid'), linecolor: css('--axis'), title: 'ZMW per USD', zeroline: false } }), cfg);
+      ${f.backtest_summary.sort((a, b) => a.h - b.h || ['rw', 'driver', 'blend'].indexOf(a.model) - ['rw', 'driver', 'blend'].indexOf(b.model)).map(r => `<tr><td>${r.h}${u}</td><td>${r.model}</td><td class="num">${fmt(r.mae_pct)}${chgU}</td><td class="num">${r.model === 'rw' ? '–' : sgn(r.skill_vs_rw * 100, 1) + '%'}</td><td class="num">${r.dm_t == null ? '–' : fmt(r.dm_t, 1)}</td><td class="num">${r.direction_hit == null ? '–' : (r.direction_hit * 100).toFixed(0) + '%'}</td><td class="num">${(r.coverage95 * 100).toFixed(1)}%</td><td class="num">${(r.coverage99 * 100).toFixed(1)}%</td><td class="num">${(r.coverage50 * 100).toFixed(0)}%</td><td class="num">${r.n}</td></tr>`).join('')}</table>`;
+    Plotly.react('fc-chart', tr, layout({ yaxis: { gridcolor: css('--grid'), linecolor: css('--axis'), title: f.target_unit || f.target_label, zeroline: false } }), cfg);
   } catch (e) { showErr(out, e); }
 }
 
@@ -350,7 +367,7 @@ async function scenario() {
     const p = await api('/api/scenario/presets');
     const av = (await api('/api/model')).drivers;
     el.innerHTML = `<div class="card"><h2>What if…? Shock a driver, see the likely kwacha response</h2>
-      <p class="hint">Shocks: prices in % change, rates in basis points. Now includes South African &amp; EM market spillover presets.</p>
+      <p class="hint">Shocks: prices in % change, rates in basis points. Select a preset or enter custom shocks.</p>
       <div class="row">${p.presets.map(x => `<button class="btn" data-p='${esc(JSON.stringify(x.shocks))}'>${esc(x.label)}</button>`).join('')}</div>
       <div class="row">${av.map(d => `<label>${esc(d.label)}</label><input type="number" step="any" data-d="${d.driver}" placeholder="${p.drivers.find(x => x.driver === d.driver)?.kind === 'rate' ? 'bp' : '%'}">`).join('')}</div>
       <div class="row"><label>Horizon (weeks)</label><input type="number" id="sc-h" value="12" min="1" max="52"><label>Sensitivity window (weeks)</label><input type="number" id="sc-w" value="156" min="60" max="1000">
@@ -454,13 +471,13 @@ async function dataTab() {
 
 /* ---------- user manual ---------- */
 function manual() {
-  $('#tab-manual').innerHTML = `<div class="card"><h2>User Manual &amp; Econometric Interpretation Guide</h2>
-    <p class="hint">How to operate Zambia Treasury Insight and interpret 95%–99% confidence intervals and South African spillover metrics.</p>
-    <table><tr><th>Concept</th><th>Meaning</th><th>How to Read It</th></tr>
+  $('#tab-manual').innerHTML = `<div class="card"><h2>Treasury Desk User Manual &amp; Econometric Interpretation Guide</h2>
+    <p class="hint">Operational guide for corporate treasuries, fixed-income desks, importers, exporters, and analysts.</p>
+    <table><tr><th>Concept</th><th>Meaning</th><th>Treasury Application</th></tr>
       <tr><td><b>USD/ZMW Sign</b></td><td>Kwacha per 1 US Dollar.</td><td><b>+ / Red</b> = weaker kwacha; <b>− / Blue</b> = stronger kwacha.</td></tr>
-      <tr><td><b>Beta (β) &amp; Confidence</b></td><td>Newey-West HAC OLS sensitivity.</td><td><b>**</b> = 99% confidence (p &lt; 0.01); <b>*</b> = 95% confidence (p &lt; 0.05). Switch to Monthly (ME) to include ZamStats CPI plus South African 3M interbank and 10Y bond yields.</td></tr>
-      <tr><td><b>South African Spillovers</b></td><td>USD/ZAR, SA Equity (EZA), SA 10Y/3M, EM Bonds (EMB).</td><td>Captures regional EM risk repricing &amp; carry spillovers alongside global Copper and DXY.</td></tr>
-      <tr><td><b>50%, 95% &amp; 99% Bands</b></td><td>Student-t guarded empirical residual quantiles.</td><td>Plan cashflows around the <b>50% core</b>, set treasury FX limits with the <b>95% CI</b>, and stress-test extreme tails with the <b>99% CI</b>. Check backtest <b>95% cover</b> and <b>99% cover</b> to verify calibration.</td></tr>
+      <tr><td><b>5-Pillar Treasury Bias</b></td><td>Synthesizes Copper inflows, Global USD/VIX, Regional Rand (USD/ZAR &amp; EZA), BoZ Real Carry &amp; Interbank spread, and Macro Fair Value.</td><td>Use the Overview playbooks to size 30–90 day FX hedges for payables, time ZMW opex conversions, and position T-bill/cash ladders.</td></tr>
+      <tr><td><b>Lagged Transmission &amp; Fair Value</b></td><td>Dynamic Newey-West HAC OLS with 1-period lags and cointegrating reversion.</td><td><b>**</b> = p &lt; 0.01; <b>*</b> = p &lt; 0.05. Captures delayed export receipts and mean reversion across USD/ZMW, Interbank Yields, and CPI YoY.</td></tr>
+      <tr><td><b>Risk Ranges</b></td><td>Empirical residual quantiles (50% core, 95% risk band, 99% tail stress).</td><td>Plan operating cashflows around the <b>50% core</b>, set treasury FX limits using the <b>95% band</b>, and stress balance sheets with the <b>99% tail</b>.</td></tr>
     </table></div>`;
 }
 

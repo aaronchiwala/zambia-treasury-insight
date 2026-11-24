@@ -118,10 +118,58 @@ def load_events() -> int:
     return db.replace_events(rows, is_demo=False)
 
 
+def compute_cross_rates(quiet: bool = True) -> list[str]:
+    """Derive ZAR/ZMW, EUR/ZMW, and GBP/ZMW daily cross-rate series aligned to USD/ZMW."""
+    import pandas as pd
+
+    stored: list[str] = []
+    meta = db.series_meta()
+    if "USDZMW" not in meta or meta["USDZMW"]["is_demo"]:
+        return stored
+    zmw = db.load_series("USDZMW")
+    if zmw.empty:
+        return stored
+
+    specs = [
+        ("ZARZMW", "USDZAR", lambda z, r: z / r, "Derived live: USD/ZMW divided by USD/ZAR"),
+        ("EURZMW", "EURUSD", lambda z, r: z * r, "Derived live: USD/ZMW multiplied by EUR/USD"),
+        ("GBPZMW", "GBPUSD", lambda z, r: z * r, "Derived live: USD/ZMW multiplied by GBP/USD"),
+    ]
+    for target_sid, ref_sid, fn, src in specs:
+        if ref_sid not in meta or meta[ref_sid]["is_demo"]:
+            continue
+        ref = db.load_series(ref_sid)
+        if ref.empty:
+            continue
+        ref_aligned = ref.reindex(zmw.index, method="ffill").dropna()
+        common = zmw.index.intersection(ref_aligned.index)
+        if len(common) < 10:
+            continue
+        cross = fn(zmw.loc[common], ref_aligned.loc[common]).replace([float("inf"), float("-inf")], float("nan")).dropna()
+        if cross.empty:
+            continue
+        m = SERIES[target_sid]
+        db.upsert_series(
+            target_sid,
+            cross,
+            name=m["name"],
+            unit=m["unit"],
+            frequency=m["native"],
+            source=src,
+            is_demo=False,
+            notes=f"Auto-derived from USDZMW and {ref_sid}",
+        )
+        stored.append(target_sid)
+        if not quiet:
+            print(f"  ✓ {target_sid:14s} {len(cross):6d} rows  [{src}]")
+    return stored
+
+
 def load_seed_files() -> dict:
     db.init()
     run = Run(quiet=True)
     run.source("Seed files", manual_csv.fetch)
+    compute_cross_rates(quiet=True)
     return dict(ok=run.ok, failed=run.failed, events=load_events())
 
 
@@ -148,6 +196,7 @@ def run_live(dry: bool = False, quiet: bool = False) -> dict:
     events = 0
     if not dry:
         events = load_events()
+        compute_cross_rates(quiet=quiet)
     run.say(f"events loaded: {events}" if not dry else "events: skipped (dry run)")
     return dict(ok=run.ok, failed=run.failed, rows=run.rows, events=events, dry=dry)
 

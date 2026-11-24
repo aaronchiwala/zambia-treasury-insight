@@ -1,10 +1,11 @@
-"""Rolling-origin out-of-sample backtest verifying 50%, 90%, 95%, and 99% empirical coverage."""
+"""Rolling-origin out-of-sample backtest verifying empirical band coverage across targets."""
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 
+from ..config import TARGET
 from .forecast import MODELS, ForecastContext
 from .panel import Panel
 
@@ -14,8 +15,11 @@ def run_backtest(
     horizons=(1, 4, 8, 12),
     min_train: int | None = None,
     step: int | None = None,
+    target: str = TARGET,
 ) -> dict:
-    ctx = ForecastContext(panel)
+    ctx = ForecastContext(panel, target=target)
+    is_price = ctx.target_kind == "price"
+    scale_pp = 100.0 if is_price else 1.0
     n = ctx.n
     mt = min_train if min_train is not None else (156 if panel.freq == "W-FRI" else 60)
     st = step if step is not None else (2 if panel.freq == "W-FRI" else 1)
@@ -60,8 +64,8 @@ def run_backtest(
     for (h, m), g in df.groupby(["h", "model"]):
         rw = df[(df.h == h) & (df.model == "rw")].set_index("t")
         gg = g.set_index("t")
-        mae = float(gg["err"].abs().mean() * 100)
-        mae_rw = float(rw["err"].abs().mean() * 100)
+        mae = float(gg["err"].abs().mean() * scale_pp)
+        mae_rw = float(rw["err"].abs().mean() * scale_pp)
         moved = gg[gg["mid"].abs() > 1e-9]
         dir_acc = float((np.sign(moved["mid"]) == np.sign(moved["actual"])).mean()) if len(moved) else None
         row = dict(
@@ -69,15 +73,15 @@ def run_backtest(
             model=m,
             n=int(len(gg)),
             mae_pct=mae,
-            rmse_pct=float(np.sqrt((gg["err"] ** 2).mean()) * 100),
-            bias_pct=float(gg["err"].mean() * 100),
+            rmse_pct=float(np.sqrt((gg["err"] ** 2).mean()) * scale_pp),
+            bias_pct=float(gg["err"].mean() * scale_pp),
             direction_hit=dir_acc,
             coverage50=float(((gg.actual >= gg.q25) & (gg.actual <= gg.q75)).mean()),
             coverage90=float(((gg.actual >= gg.q05) & (gg.actual <= gg.q95)).mean()),
             coverage95=float(((gg.actual >= gg.q025) & (gg.actual <= gg.q975)).mean()),
             coverage99=float(((gg.actual >= gg.q005) & (gg.actual <= gg.q995)).mean()),
-            width90_pct=float((gg.q95 - gg.q05).mean() * 100),
-            width95_pct=float((gg.q975 - gg.q025).mean() * 100),
+            width90_pct=float((gg.q95 - gg.q05).mean() * scale_pp),
+            width95_pct=float((gg.q975 - gg.q025).mean() * scale_pp),
             skill_vs_rw=float(1 - mae / mae_rw) if mae_rw > 0 else None,
             dm_t=None,
         )
@@ -91,13 +95,14 @@ def run_backtest(
     track = []
     g4 = df[(df.h == min(horizons, key=lambda x: abs(x - 4))) & (df.model == "blend")]
     for _, r in g4.iterrows():
+        cvt = (lambda x: float((np.exp(x) - 1) * 100)) if is_price else (lambda x: float(x))
         track.append(
             dict(
                 date=r["date"].strftime("%Y-%m-%d"),
-                actual_pct=float((np.exp(r["actual"]) - 1) * 100),
-                mid_pct=float((np.exp(r["mid"]) - 1) * 100),
-                lo_pct=float((np.exp(r["q025"]) - 1) * 100),
-                hi_pct=float((np.exp(r["q975"]) - 1) * 100),
+                actual_pct=cvt(r["actual"]),
+                mid_pct=cvt(r["mid"]),
+                lo_pct=cvt(r["q025"]),
+                hi_pct=cvt(r["q975"]),
             )
         )
 

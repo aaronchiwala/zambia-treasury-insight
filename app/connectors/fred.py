@@ -16,6 +16,8 @@ FRED_SERIES = {
     "COPPER_USD_M": ("PCOPPUSDM", "Global copper price (monthly, IMF via FRED), USD per metric tonne."),
     "VIX": ("VIXCLS", "CBOE Volatility Index (daily): global risk appetite, matters for frontier currencies."),
     "USDZAR": ("DEXSFUS", "South African Rand to US Dollar spot exchange rate (daily, Fed H.10)."),
+    "EURUSD": ("DEXUSEU", "US Dollars per 1 Euro spot exchange rate (daily, Fed H.10)."),
+    "GBPUSD": ("DEXUSUK", "US Dollars per 1 British Pound spot exchange rate (daily, Fed H.10)."),
     "SA_10Y": ("IRLTLT01ZAM156N", "South Africa 10-year long-term government bond yield (monthly, OECD via FRED)."),
     "SA_3M_RATE": ("IR3TIB01ZAM156N", "South Africa 3-month interbank money market rate (monthly, OECD via FRED)."),
 }
