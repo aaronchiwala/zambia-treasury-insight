@@ -74,14 +74,16 @@ class Run:
         try:
             results = fn()
         except Exception as e:  # noqa: BLE001 - isolate each source
+            why = f"{type(e).__name__}: {e}"
             if not self.dry:
-                db.log_ingest(name, 0, "error", repr(e))
+                db.log_ingest(name, 0, "error", why)
             self.failed.append(name)
-            self.rows.append(dict(series=name, rows=0, first="", last="", status="error", note=repr(e), source=""))
-            self.say(f"  ✗ failed: {str(e)[:200]}")
+            self.rows.append(dict(series=name, rows=0, first="", last="", status="error", note=why, source=""))
+            self.say(f"  ✗ failed: {why[:300]}")
             return
-        for r in results:
-            self.store(r)
+        stored = sum(1 for r in results if self.store(r))
+        if stored and not self.dry:
+            db.log_ingest(name, stored, "ok", "")      # clears an earlier source-level error from the problems list
 
 
 def load_events() -> int:
@@ -100,7 +102,20 @@ def run_live(dry: bool = False, quiet: bool = False) -> dict:
     run.source("Bank of Zambia FX (via Frankfurter)", frankfurter_boz.fetch)
     run.source("FRED global drivers", fred.fetch)
     run.source("Copper daily (Yahoo, then Stooq)", copper.fetch)
-    run.source("Manual CSVs (policy rate, inflation, anything you add)", manual_csv.fetch)
+    live_ok = set(run.ok)
+
+    def manual() -> list:
+        """Manual files fill series that have no feed (policy rate, inflation) and act as a FALLBACK for feed-backed
+        series. They never override a live feed that just loaded, so a stale file cannot hide fresh data."""
+        kept = []
+        for r in manual_csv.fetch():
+            if r.series_id in live_ok:
+                run.say(f"  - {r.series_id}: live feed loaded, so the manual file is not used")
+            else:
+                kept.append(r)
+        return kept
+
+    run.source("Manual CSVs (policy rate, inflation; fallback for failed feeds)", manual)
     events = 0
     if not dry:
         events = load_events()

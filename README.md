@@ -10,7 +10,7 @@ python -m app.ingest --check     # dry run: fetch + validate every source, print
 python -m app.ingest --live      # real data (needs internet)
 python -m app.ingest --demo      # OR synthetic data, clearly bannered, so everything works offline
 uvicorn app.main:app --reload    # open http://localhost:8000
-pytest                           # 43 tests
+pytest                           # 65 tests
 ```
 
 Hosting on Render: see [docs/DEPLOY_RENDER.md](docs/DEPLOY_RENDER.md). Set `ZTI_AUTO_INGEST=1` to fetch live data at
@@ -42,6 +42,17 @@ mining export receipts, Kariba/power data, pre-2020 inflation. Bank of Zambia's 
 that cannot be scraped reliably, and its auction results are PDFs. Any of these can be added by dropping a
 `data/manual/<SERIES_ID>.csv` (`date,value`) and registering the series in `app/config.py`; a Bloomberg/Refinitiv or
 internal desk feed is one more connector returning a pandas Series.
+
+## Getting data in when a feed fails
+
+* **Data & quality → Load data** shows the exact error per source (URL, HTTP status), a **Retry** button, and a
+  **file uploader** (CSV or Excel, e.g. a Bank of Zambia rates download). Columns are detected automatically and
+  reported back; the dollar column is preferred for USD/ZMW; rows are merged into stored data.
+* USD/ZMW is requested from the provider in one-year pieces, then as weekly averages, then from the provider's blended
+  feed. The source label on the Data tab says which one was used.
+* Permanent data: commit `data/manual/<SERIES_ID>.csv` (`date,value`); it is loaded on every start. For a series that has a
+  live feed (e.g. USDZMW) it is used only when the feed fails, so a stale file never hides fresh data.
+* On a public host (Render) the upload and retry controls stay locked until `ZTI_PASSWORD` is set.
 
 ## Safeguards in the data layer
 

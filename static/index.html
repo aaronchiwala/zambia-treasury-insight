@@ -172,6 +172,15 @@ async function boot() {
     if (s.mode !== 'live') b.innerHTML = `<div class="banner"><b>⚠ DEMO DATA</b><span>The numbers on screen are synthetic and for development only. They do not describe the real kwacha, copper or Bank of Zambia. Run <code>python -m app.ingest --live</code> for real data.</span></div>`;
     const stale = s.series.filter(x => x.stale && !x.is_demo);
     if (stale.length) b.innerHTML += `<div class="banner"><b>⚠ Stale data</b><span>${stale.map(x => esc(x.series_id) + ' (' + x.age_days + 'd old)').join(', ')}</span></div>`;
+    if (!s.series.some(x => x.series_id === 'USDZMW')) {   // other series loaded but the exchange rate did not
+      const running = s.refresh && s.refresh.running;
+      b.innerHTML += `<div class="banner"><b>${running ? '⏳ Loading' : '⚠ No USD/ZMW data'}</b><span>${running
+        ? 'The exchange-rate feed is loading; this page refreshes by itself.'
+        : 'The exchange-rate feed did not load. The reason is listed below. Use <b>Retry now</b>, or upload a file of Bank of Zambia rates.'}</span></div>`;
+      show('data');
+      if (running) setTimeout(() => location.reload(), 6000);
+      return;
+    }
   } catch (e) { showErr($('#banner'), e); }
   show('overview');
 }
@@ -380,7 +389,21 @@ async function dataTab() {
     const [s, m] = await Promise.all([api('/api/status'), api('/api/model').catch(() => null)]);
     const rf = s.refresh || {};
     const rfLine = rf.enabled ? `<p class="hint">Automatic refresh every ${rf.interval_hours}h. ${rf.running ? 'Running now…' : 'Last run finished ' + esc(rf.last_end || '–') + ' (UTC)'}${rf.last_failed && rf.last_failed.length ? '. <b>Failed sources:</b> ' + esc(rf.last_failed.join(', ')) : ''}.</p>` : '';
-    el.innerHTML = `<div class="card"><h2>Data inventory &amp; provenance</h2><p class="hint">Every series, where it came from, and whether it is fresh. Anything marked DEMO is synthetic.</p>${rfLine}
+    const locked = s.controls_locked;
+    const problems = (s.problems || []).map(p => `<tr><td>${esc(p.series_id)}</td><td><span class="tag ${p.status === 'error' ? 'bad' : ''}">${esc(p.status)}</span></td><td>${esc(p.message || '')}<br><span class="sub">${esc(p.run_at)} UTC</span></td></tr>`).join('');
+    const loadCard = `<div class="card"><h2>Load data</h2>
+      ${locked ? '<div class="banner"><b>Locked</b><span>This public site has no password, so loading data from the browser is disabled. Set <code>ZTI_PASSWORD</code> in the Render dashboard (Environment), redeploy, and sign in.</span></div>' : ''}
+      ${problems ? `<h2 style="margin-top:6px">Problems from the last load</h2><table><tr><th>Source / series</th><th>Status</th><th>What happened</th></tr>${problems}</table>` : '<p class="hint">No problems recorded from the last load.</p>'}
+      <div class="row" style="margin-top:12px"><button class="btn primary" id="rf-go" ${locked ? 'disabled' : ''}>Retry live data load now</button><span id="rf-msg" class="sub"></span></div>
+      <h2 style="margin-top:14px">Or upload a file</h2>
+      <p class="hint">A CSV or Excel (.xlsx) file with a date column and a value column, for example Bank of Zambia's historical exchange rates for USD/ZMW (kwacha per dollar). New rows are merged into what is stored; the same dates are overwritten. Uploaded data is kept until the server restarts, so for permanent data also commit the file to <code>data/manual/&lt;SERIES&gt;.csv</code> in GitHub.</p>
+      <div class="row"><label>Series</label><select id="up-s">${(s.registry || []).map(r => `<option value="${esc(r.series_id)}" ${r.series_id === 'USDZMW' ? 'selected' : ''}>${esc(r.series_id)} · ${esc(r.name)}</option>`).join('')}</select>
+        <input type="file" id="up-f" accept=".csv,.txt,.xlsx">
+        <label>Value column (optional)</label><input id="up-c" placeholder="e.g. Mid" style="width:120px">
+        <label><input type="checkbox" id="up-r"> replace existing</label>
+        <button class="btn primary" id="up-go" ${locked ? 'disabled' : ''}>Upload</button></div>
+      <div id="up-msg" class="sub" style="margin-top:6px"></div></div>`;
+    el.innerHTML = loadCard + `<div class="card"><h2>Data inventory &amp; provenance</h2><p class="hint">Every series, where it came from, and whether it is fresh. Anything marked DEMO is synthetic.</p>${rfLine}
       <table><tr><th>Series</th><th>Source</th><th class="num">Rows</th><th>From</th><th>To</th><th class="num">Age</th><th>Status</th></tr>
       ${s.series.map(x => `<tr><td>${esc(x.name)}<br><span class="sub">${esc(x.series_id)} · ${esc(x.unit)}</span></td><td>${esc(x.source)}</td><td class="num">${x.n_obs}</td><td>${x.first_date}</td><td>${x.last_date}</td><td class="num">${x.age_days}d</td>
         <td>${x.is_demo ? '<span class="tag demo">DEMO</span>' : x.stale ? '<span class="tag bad">stale</span>' : '<span class="tag">ok</span>'}</td></tr>`).join('')}</table></div>
@@ -389,6 +412,30 @@ async function dataTab() {
         ${(m.excluded.length || m.skipped.length) ? `<h2 style="margin-top:14px">Not used</h2><table>${m.excluded.map(x => `<tr><td>${esc(x.driver)}</td><td>${esc(x.reason)}</td></tr>`).join('')}${m.skipped.map(x => `<tr><td>${esc(x.series)}</td><td>${esc(x.reason)}</td></tr>`).join('')}</table>` : ''}
         ${m.rolling && m.rolling.dates ? '<h2 style="margin-top:14px">How sensitivities have shifted (rolling 2-year)</h2><div class="legend" id="rb-leg"></div><div id="rb-chart" class="chart short"></div>' : ''}</div>` : ''}
       <div class="card"><h2>Recent ingest runs</h2><table><tr><th>When (UTC)</th><th>Series</th><th class="num">Rows</th><th>Status</th><th>Message</th></tr>${s.ingest_log.map(l => `<tr><td>${esc(l.run_at)}</td><td>${esc(l.series_id)}</td><td class="num">${l.rows}</td><td>${esc(l.status)}</td><td>${esc(l.message)}</td></tr>`).join('') || '<tr><td colspan="5" class="sub">No runs logged.</td></tr>'}</table></div>`;
+    $('#rf-go').onclick = async () => {
+      const msg = $('#rf-msg'); msg.textContent = 'Starting…';
+      try {
+        const r = await api('/api/refresh', { method: 'POST' });
+        msg.textContent = r.running ? 'A load is already running…' : 'Loading in the background (about a minute). This page will reload.';
+        setTimeout(() => location.reload(), 45000);
+      } catch (e) { msg.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+    };
+    $('#up-go').onclick = async () => {
+      const f = $('#up-f').files[0], msg = $('#up-msg');
+      if (!f) { msg.innerHTML = '<span class="err">Choose a file first.</span>'; return; }
+      msg.textContent = 'Uploading…';
+      const q = new URLSearchParams({ series_id: $('#up-s').value, filename: f.name, replace: $('#up-r').checked });
+      if ($('#up-c').value.trim()) q.set('value_col', $('#up-c').value.trim());
+      try {
+        const r = await api('/api/upload?' + q, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: await f.arrayBuffer() });
+        const u = r.upload;
+        msg.innerHTML = `<b>Loaded.</b> Stored ${r.stored_rows} rows of ${esc(r.series_id)} (${u.first} → ${u.last}). Date column “${esc(u.date_column)}”, value column “${esc(u.value_column)}”` +
+          (u.numeric_columns.length > 1 ? ` (other numeric columns: ${esc(u.numeric_columns.filter(c => c !== u.value_column).join(', '))}; type one in “Value column” to switch)` : '') +
+          `. Latest: ${u.sample.map(x => x.date + ' = ' + x.value).join('; ')}.` + (r.quality.length ? '<br>Notes: ' + r.quality.map(x => esc(x.message)).join('; ') : '') +
+          '<br>Reloading…';
+        setTimeout(() => location.reload(), 2500);
+      } catch (e) { msg.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+    };
     if (m && m.rolling && m.rolling.dates) {
       const cols = [css('--s1'), css('--s2'), css('--s3'), css('--s4')]; const keys = Object.keys(m.rolling.betas);
       $('#rb-leg').innerHTML = keys.map((k, i) => `<span><i style="background:${cols[i % 4]}"></i>${esc(m.drivers.find(d => d.driver === k)?.label || k)}</span>`).join('');

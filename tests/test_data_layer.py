@@ -117,8 +117,9 @@ def test_http_get_retries_then_succeeds_and_does_not_retry_404(monkeypatch):
     calls["n"] = 0
     monkeypatch.setattr(base.httpx, "get", lambda url, **kw: (calls.__setitem__("n", calls["n"] + 1),
                         httpx.Response(404, request=httpx.Request("GET", url)))[1])
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(base.FeedError) as exc:
         base.http_get("https://example.test/missing")
+    assert exc.value.status == 404 and "example.test/missing" in str(exc.value)
     assert calls["n"] == 1
 
 

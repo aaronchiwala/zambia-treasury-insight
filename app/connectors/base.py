@@ -6,8 +6,16 @@ from dataclasses import dataclass
 import httpx
 import pandas as pd
 
-UA = {"User-Agent": "zambia-treasury-insight/0.2 (research tool)"}
+UA = {"User-Agent": "zambia-treasury-insight/0.3 (research tool)"}
 LB_PER_TONNE = 2204.62
+
+
+class FeedError(RuntimeError):
+    """A data feed failed. The message always says which URL and what came back, so it is useful on screen."""
+
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
 
 
 @dataclass
@@ -20,22 +28,21 @@ class SeriesResult:
 
 def http_get(url: str, *, params: dict | None = None, timeout: float = 60.0, retries: int = 3) -> httpx.Response:
     """GET with retry/backoff on network errors, 429 and 5xx. Client errors (4xx) fail immediately.
-    Honours HTTPS_PROXY / SSL_CERT_FILE environment variables."""
-    last: Exception | None = None
+    Raises FeedError with the URL, HTTP status and a snippet of the response body. Honours HTTPS_PROXY."""
+    last: FeedError | None = None
     for attempt in range(retries):
         try:
             r = httpx.get(url, params=params, timeout=timeout, headers=UA, follow_redirects=True)
-            if r.status_code == 429 or r.status_code >= 500:
-                raise httpx.HTTPStatusError(f"HTTP {r.status_code}", request=r.request, response=r)
-            r.raise_for_status()
-            return r
-        except (httpx.TransportError, httpx.HTTPStatusError) as e:
-            last = e
-            code = getattr(getattr(e, "response", None), "status_code", None)
-            if code is not None and code < 500 and code != 429:
-                raise
-            if attempt < retries - 1:
-                time.sleep(2 ** attempt)
+        except httpx.TransportError as e:
+            last = FeedError(f"{url} -> network error: {type(e).__name__}: {e}")
+        else:
+            if r.status_code < 400:
+                return r
+            last = FeedError(f"{url} -> HTTP {r.status_code}: {r.text.strip()[:200]}", status=r.status_code)
+            if r.status_code < 500 and r.status_code != 429:
+                raise last
+        if attempt < retries - 1:
+            time.sleep(2 ** attempt)
     assert last is not None
     raise last
 

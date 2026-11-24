@@ -132,6 +132,18 @@ def recent_ingest_log(limit: int = 30) -> list[dict]:
         return [dict(r) for r in con.execute("SELECT * FROM ingest_log ORDER BY id DESC LIMIT ?", (limit,))]
 
 
+def latest_problems(limit: int = 80) -> list[dict]:
+    """Most recent log entry per series/source, kept only if it is an error or a warning."""
+    seen, out = set(), []
+    for r in recent_ingest_log(limit):          # newest first
+        if r["series_id"] in seen:
+            continue
+        seen.add(r["series_id"])
+        if r["status"] != "ok":
+            out.append(r)
+    return out
+
+
 def data_mode() -> str:
     """'demo' | 'mixed' | 'live' | 'empty' — drives the warning banner in the UI."""
     meta = series_meta()

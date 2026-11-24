@@ -55,6 +55,20 @@ source, row count and date range. A failed source is listed there with the reaso
 * This tool uses only public data. Do not upload internal bank data to a public host; for that, deploy inside the bank's
   own infrastructure.
 
+## If the page shows "No USD/ZMW data" or "Could not load: No data loaded"
+
+That means the policy-rate and inflation files loaded but the live exchange-rate download did not. The app now opens
+the **Data & quality** tab in that situation. Under **Load data** it lists exactly what failed (URL, HTTP status,
+message). Then you have three ways forward, in this order:
+
+1. **Retry live data load now** (a button): transient provider errors often clear on a retry.
+2. **Upload a file:** download Bank of Zambia's historical exchange rates (CSV or Excel), pick `USDZMW`, choose the file
+   and click Upload. The page finds the date and dollar columns itself and tells you which it used. Uploads need
+   `ZTI_PASSWORD` to be set on a public host.
+3. **Make it permanent:** save the same file as `data/manual/USDZMW.csv` (`date,value`) in GitHub. It is loaded on every
+   start (the free Render disk is wiped on restart, so uploads alone do not survive). It is used only while the live
+   feed is failing; once the feed works again it takes over automatically.
+
 ## Troubleshooting
 
 | Symptom | Likely cause / fix |

@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import os
 import secrets
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from functools import wraps
@@ -11,16 +12,17 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import db, events_derived
+from . import db, events_derived, ingest, upload as upload_mod
 from .analytics import attribution, backtest, forecast, scenario
 from .analytics.panel import DataError, build_panel
 from .config import GROUP_LABELS, SERIES, TARGET
 from .scheduler import Refresher
+from .validate import summarize, validate_series
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 db.init()
@@ -125,13 +127,72 @@ def status():
     if refresher.state.get("last_error"):
         notes.append("Last automatic refresh: " + str(refresher.state["last_error"]))
     return dict(mode=mode, series=sorted(series, key=lambda s: s["series_id"]), notes=notes,
-                refresh=dict(refresher.state), ingest_log=db.recent_ingest_log(12),
+                refresh=dict(refresher.state), problems=db.latest_problems(),
+                registry=[dict(series_id=k, name=v["name"], unit=v["unit"], native=v["native"]) for k, v in SERIES.items()],
+                controls_locked=_hosted_unprotected(), ingest_log=db.recent_ingest_log(12),
                 server_time=datetime.now(timezone.utc).isoformat(timespec="seconds"))
 
 
 @app.get("/api/health")
 def health():
     return dict(ok=True)
+
+
+def _hosted_unprotected() -> bool:
+    """On a public host (Render sets RENDER) without a password, nobody may change data from the browser."""
+    return bool(os.environ.get("RENDER")) and not os.environ.get("ZTI_PASSWORD")
+
+
+def _require_controls() -> None:
+    if _hosted_unprotected():
+        raise HTTPException(403, "Data controls are disabled on a public host until ZTI_PASSWORD is set "
+                                 "(Render dashboard > Environment). Set it, redeploy, then sign in.")
+
+
+@app.post("/api/refresh")
+def refresh_now():
+    """Re-run the live data load in the background (same as the automatic refresh)."""
+    _require_controls()
+    if refresher.state.get("running"):
+        return dict(started=False, running=True)
+    threading.Thread(target=refresher.run_once, name="zti-refresh-now", daemon=True).start()
+    return dict(started=True, running=False)
+
+
+@app.post("/api/upload")
+async def upload_series(request: Request, series_id: str, filename: str = "", value_col: str | None = None,
+                        replace: bool = False):
+    """Load a CSV/XLSX the user supplies (e.g. a Bank of Zambia rates download) into one series.
+
+    By default the rows are MERGED into any stored real data (same dates are overwritten); replace=true
+    discards what was there. The data passes the same quality gate as automatic feeds."""
+    _require_controls()
+    if series_id not in SERIES:
+        raise HTTPException(404, f"Unknown series {series_id!r}. Known: {', '.join(SERIES)}")
+    try:
+        hint = ("usd",) if series_id == "USDZMW" else ()      # multi-currency tables: take the dollar column
+        new, info = upload_mod.parse_upload(await request.body(), filename, value_col, prefer=hint)
+    except upload_mod.UploadError as e:
+        raise HTTPException(422, str(e))
+    meta = db.series_meta().get(series_id)
+    if meta and not meta["is_demo"] and not replace:
+        old = db.load_series(series_id)
+        new = pd.concat([old, new])
+        new = new[~new.index.duplicated(keep="last")].sort_index()
+    cleaned, issues = validate_series(series_id, new)
+    status, msg = summarize(issues)
+    if cleaned is None:
+        raise HTTPException(422, msg or "data rejected by the quality checks")
+    m = SERIES[series_id]
+    db.clear_demo()
+    n = db.upsert_series(series_id, cleaned, name=m["name"], unit=m["unit"], frequency=m["native"],
+                         source=f"upload: {filename or 'file'}", is_demo=False,
+                         notes=f"Uploaded by a user; value column {info['value_column']!r}.")
+    db.log_ingest(series_id, n, status, msg or f"uploaded {info['rows']} rows from {filename or 'file'}")
+    if not db.load_events(is_demo=False):
+        ingest.load_events()
+    _cache.clear()
+    return dict(ok=True, series_id=series_id, stored_rows=n, upload=info, quality=[dict(level=a, message=b) for a, b in issues])
 
 
 @app.get("/api/overview")
