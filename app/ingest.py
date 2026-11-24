@@ -1,13 +1,10 @@
-"""Data ingestion.
+"""Populate the database: real live data (with manual CSV backfill/policy/CPI) OR demo data.
 
-    python -m app.ingest --check    # dry run: fetch everything, validate, print a report, write NOTHING
-    python -m app.ingest --live     # BoZ FX + FRED + copper + data/manual/*.csv + data/events.csv
-    python -m app.ingest --manual   # only re-read data/manual/*.csv and events
+Command line:
+    python -m app.ingest --live     # real data (BoZ FX + FRED + SA/EM Yahoo + Copper + manual CSVs)
+    python -m app.ingest --check    # dry run: fetch & validate all live sources, write nothing
+    python -m app.ingest --manual   # offline: load only the CSV files in data/manual/
     python -m app.ingest --demo     # synthetic data so the app runs end-to-end (clearly labelled)
-
-Each source runs in isolation: one broken feed never blocks the others, and every series passes the quality
-gate in app/validate.py before it is stored. Demo rows are removed only once real data has been stored, so a
-total network failure never leaves the database empty.
 """
 from __future__ import annotations
 
@@ -16,7 +13,7 @@ import csv
 
 from . import db, demo_data
 from .config import EVENTS_CSV, SERIES
-from .connectors import copper, fred, frankfurter_boz, manual_csv
+from .connectors import copper, fred, frankfurter_boz, manual_csv, yahoo
 from .validate import summarize, validate_series
 
 
@@ -29,7 +26,6 @@ class Run:
         self.failed: list[str] = []
         self.rows: list[dict] = []
         self._demo_cleared = False
-        # Demo rows are replaced only when REAL USD/ZMW has loaded in this run, so a failed refresh never wipes them.
         self.fx_ok = False
 
     def say(self, msg: str) -> None:
@@ -58,17 +54,36 @@ class Run:
             if not self._demo_cleared:
                 db.clear_demo()
                 self._demo_cleared = True
-            n = db.upsert_series(sid, cleaned, name=m["name"], unit=m["unit"], frequency=m["native"],
-                                 source=res.source, is_demo=False, notes=res.notes)
+            n = db.upsert_series(
+                sid,
+                cleaned,
+                name=m["name"],
+                unit=m["unit"],
+                frequency=m["native"],
+                source=res.source,
+                is_demo=False,
+                notes=res.notes,
+            )
             db.log_ingest(sid, n, status, msg)
         else:
             n = len(cleaned)
         self.ok.append(sid)
-        self.rows.append(dict(series=sid, rows=n, first=str(cleaned.index.min().date()),
-                              last=str(cleaned.index.max().date()), status=status, note=msg, source=res.source))
+        self.rows.append(
+            dict(
+                series=sid,
+                rows=n,
+                first=str(cleaned.index.min().date()),
+                last=str(cleaned.index.max().date()),
+                status=status,
+                note=msg,
+                source=res.source,
+            )
+        )
         flag = "✓" if status == "ok" else "!"
-        self.say(f"  {flag} {sid:14s} {n:6d} rows  {cleaned.index.min().date()} → {cleaned.index.max().date()}"
-                 f"  [{res.source[:70]}]" + (f"\n      note: {msg}" if msg else ""))
+        self.say(
+            f"  {flag} {sid:14s} {n:6d} rows  {cleaned.index.min().date()} → {cleaned.index.max().date()}"
+            f"  [{res.source[:70]}]" + (f"\n      note: {msg}" if msg else "")
+        )
         return True
 
     def _fail(self, sid: str, why: str) -> None:
@@ -92,7 +107,7 @@ class Run:
             return
         stored = sum(1 for r in results if self.store(r))
         if stored and not self.dry:
-            db.log_ingest(name, stored, "ok", "")      # clears an earlier source-level error from the problems list
+            db.log_ingest(name, stored, "ok", "")
 
 
 def load_events() -> int:
@@ -104,7 +119,6 @@ def load_events() -> int:
 
 
 def load_seed_files() -> dict:
-    """Load only the files shipped in the repo (no network): manual CSVs and curated events."""
     db.init()
     run = Run(quiet=True)
     run.source("Seed files", manual_csv.fetch)
@@ -112,18 +126,16 @@ def load_seed_files() -> dict:
 
 
 def run_live(dry: bool = False, quiet: bool = False) -> dict:
-    """Pull every live source plus the manual CSVs. Safe to call repeatedly (idempotent)."""
     if not dry:
         db.init()
     run = Run(dry=dry, quiet=quiet)
     run.source("Bank of Zambia FX (via Frankfurter)", frankfurter_boz.fetch)
-    run.source("FRED global drivers", fred.fetch)
+    run.source("FRED global & SA drivers", fred.fetch)
     run.source("Copper daily (Yahoo, then Stooq)", copper.fetch)
+    run.source("South Africa & EM daily ETFs (Yahoo EZA, EMB)", yahoo.fetch_etfs)
     live_ok = set(run.ok)
 
     def manual() -> list:
-        """Manual files fill series that have no feed (policy rate, inflation) and act as a FALLBACK for feed-backed
-        series. They never override a live feed that just loaded, so a stale file cannot hide fresh data."""
         kept = []
         for r in manual_csv.fetch():
             if r.series_id in live_ok:

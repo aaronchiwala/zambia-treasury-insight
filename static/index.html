@@ -2,61 +2,58 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Zambia Treasury Insight</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Zambia Treasury Insight — USD/ZMW</title>
 <script src="/static/vendor/plotly.min.js"></script>
 <style>
 :root {
-  color-scheme: light;
-  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink2: #52514e; --muted: #898781;
-  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,.10);
-  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300;
-  --weak: #e34948; --strong: #2a78d6;
-  --good: #006300; --warn: #fab219; --crit: #d03b3b; --warnbg: #fff4d6;
+  --bg: #ffffff; --page: #f6f7f9; --surface: #ffffff;
+  --ink: #0f172a; --ink2: #475569; --muted: #64748b;
+  --grid: #e2e8f0; --axis: #cbd5e1;
+  --s1: #0f766e; --s2: #2563eb; --s3: #d97706; --s4: #64748b; --s5: #7c3aed; --s6: #0891b2;
+  --weak: #dc2626; --strong: #2563eb; --warn: #d97706; --warnbg: #fffbeb; --crit: #dc2626;
 }
-@media (prefers-color-scheme: dark) {
-  :root:where(:not([data-theme="light"])) {
-    color-scheme: dark;
-    --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink2: #c3c2b7; --muted: #898781;
-    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,.10);
-    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #0ca30c;
-    --weak: #e66767; --strong: #3987e5; --good: #0ca30c; --warnbg: #2e2810;
-  }
-}
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink2: #c3c2b7; --muted: #898781;
-  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,.10);
-  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #0ca30c;
-  --weak: #e66767; --strong: #3987e5; --good: #0ca30c; --warnbg: #2e2810;
+@media (prefers-color-scheme: dark) { :root:not([data-theme=light]) {
+  --bg: #0b0f17; --page: #0b0f17; --surface: #111827;
+  --ink: #e5e7eb; --ink2: #9ca3af; --muted: #6b7280;
+  --grid: #1f2937; --axis: #374151; --warnbg: #2a1d06;
+  --s1: #2dd4bf; --s2: #60a5fa; --s3: #fbbf24; --s4: #9ca3af; --s5: #a78bfa; --s6: #22d3ee;
+  --weak: #f87171; --strong: #60a5fa; --crit: #f87171;
+}}
+:root[data-theme=dark] {
+  --bg: #0b0f17; --page: #0b0f17; --surface: #111827;
+  --ink: #e5e7eb; --ink2: #9ca3af; --muted: #6b7280;
+  --grid: #1f2937; --axis: #374151; --warnbg: #2a1d06;
+  --s1: #2dd4bf; --s2: #60a5fa; --s3: #fbbf24; --s4: #9ca3af; --s5: #a78bfa; --s6: #22d3ee;
+  --weak: #f87171; --strong: #60a5fa; --crit: #f87171;
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--page); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
-header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 20px 0; position: sticky; top: 0; z-index: 5; }
-.top { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
-h1 { font-size: 18px; margin: 0; font-weight: 650; }
-.sub { color: var(--ink2); font-size: 13px; }
+body { margin: 0; font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: var(--page); color: var(--ink); }
+header { background: var(--surface); border-bottom: 1px solid var(--grid); padding: 12px 24px 0; position: sticky; top: 0; z-index: 10; }
+.top { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+h1 { margin: 0; font-size: 18px; font-weight: 700; }
+.sub { color: var(--muted); font-size: 12px; }
 .spacer { flex: 1; }
-button, select, input { font: inherit; color: var(--ink); }
-.btn { background: var(--surface); border: 1px solid var(--axis); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
-.btn:hover { background: var(--page); }
-.btn.primary { background: var(--s1); border-color: var(--s1); color: #fff; font-weight: 600; }
-.btn.sel { border-color: var(--s1); box-shadow: inset 0 0 0 1px var(--s1); }
 nav { display: flex; gap: 2px; margin-top: 10px; overflow-x: auto; }
-nav button { background: none; border: none; border-bottom: 3px solid transparent; padding: 8px 14px; cursor: pointer; color: var(--ink2); font-weight: 550; white-space: nowrap; }
-nav button.on { color: var(--ink); border-bottom-color: var(--s1); }
-main { max-width: 1180px; margin: 0 auto; padding: 18px 16px 60px; }
-.banner { display: flex; gap: 10px; align-items: flex-start; background: var(--warnbg); border: 1px solid var(--warn); border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; }
-.banner b { white-space: nowrap; }
-.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
-.card h2 { font-size: 15px; margin: 0 0 4px; }
-.hint { color: var(--ink2); font-size: 13px; margin: 0 0 10px; }
-.grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); margin-bottom: 16px; }
-.stat { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+nav button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 9px 14px; font: inherit; color: var(--ink2); cursor: pointer; white-space: nowrap; }
+nav button.on { color: var(--ink); font-weight: 600; border-bottom-color: var(--s1); }
+main { max-width: 1200px; margin: 0 auto; padding: 20px 24px 60px; }
+.banner { display: flex; gap: 10px; align-items: baseline; padding: 10px 14px; border: 1px solid var(--warn); background: var(--warnbg); border-radius: 8px; margin-bottom: 16px; font-size: 13px; }
+.banner b { color: var(--warn); }
+.grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); margin-bottom: 18px; }
+.card { background: var(--surface); border: 1px solid var(--grid); border-radius: 10px; padding: 16px 18px; margin-bottom: 16px; }
+.card h2 { margin: 0 0 6px; font-size: 15px; }
+.hint { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
+.stat { background: var(--surface); border: 1px solid var(--grid); border-radius: 10px; padding: 12px 14px; }
 .stat .n { color: var(--ink2); font-size: 12px; }
-.stat .v { font-size: 24px; font-weight: 650; margin: 2px 0; }
-.stat .d { font-size: 12px; color: var(--ink2); display: flex; gap: 10px; flex-wrap: wrap; }
-.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+.stat .v { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; margin: 2px 0; }
+.stat .d { font-size: 12px; color: var(--ink2); display: flex; gap: 10px; font-variant-numeric: tabular-nums; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+button.btn, select, input { font: 13px/1.3 inherit; color: var(--ink); }
+.btn { background: var(--surface); border: 1px solid var(--axis); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+.btn:hover { border-color: var(--ink2); }
+.btn.sel { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.btn.primary { background: var(--s1); color: #fff; border-color: var(--s1); }
 .row label { color: var(--ink2); font-size: 13px; }
 input, select { background: var(--surface); border: 1px solid var(--axis); border-radius: 8px; padding: 6px 8px; }
 input[type=number] { width: 110px; }
@@ -73,7 +70,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .tag { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--axis); color: var(--ink2); }
 .tag.demo { border-color: var(--warn); color: var(--ink); background: var(--warnbg); }
 .tag.bad { border-color: var(--crit); color: var(--crit); }
-.verdict { border-left: 4px solid var(--s1); padding: 8px 12px; background: var(--page); border-radius: 0 8px 8px 0; margin: 10px 0; }
+.verdict { border: 1px solid var(--grid); padding: 10px 14px; background: var(--page); border-radius: 8px; margin: 10px 0; }
 .big { font-size: 32px; font-weight: 700; }
 .err { color: var(--crit); }
 .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--ink2); margin: 4px 0 8px; }
@@ -87,7 +84,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 <header>
   <div class="top">
     <h1>Zambia Treasury Insight</h1>
-    <span class="sub">Kwacha drivers, history explained, forecasts with track record. Decision support only — no trading.</span>
+    <span class="sub">USD/ZMW drivers, South African spillovers, 95%–99% confidence intervals &amp; backtest track record.</span>
     <span class="spacer"></span>
     <button class="btn" id="theme" title="Toggle light / dark">Theme</button>
   </div>
@@ -98,6 +95,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
     <button data-tab="forecast">Forecast</button>
     <button data-tab="scenario">Scenarios</button>
     <button data-tab="data">Data &amp; quality</button>
+    <button data-tab="manual">User manual</button>
   </nav>
 </header>
 <main>
@@ -108,6 +106,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   <section id="tab-forecast" class="hidden"></section>
   <section id="tab-scenario" class="hidden"></section>
   <section id="tab-data" class="hidden"></section>
+  <section id="tab-manual" class="hidden"></section>
 </main>
 
 <script>
@@ -116,7 +115,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const fmt = (x, d = 2) => (x === null || x === undefined || isNaN(x)) ? '–' : Number(x).toLocaleString('en-US', {minimumFractionDigits: d, maximumFractionDigits: d});
 const sgn = (x, d = 1) => (x === null || x === undefined || isNaN(x)) ? '–' : (x > 0 ? '+' : x < 0 ? '−' : '') + Math.abs(x).toFixed(d);
-const state = { tab: 'overview', range: '3Y', compare: '', fcH: 12, fcModel: 'auto', status: null, lastDate: null, rendered: {} };
+const state = { tab: 'overview', range: '3Y', compare: '', freq: 'W-FRI', fcH: 12, fcModel: 'auto', status: null, lastDate: null, rendered: {} };
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -138,7 +137,6 @@ function layout(extra = {}) {
 }
 const cfg = { displaylogo: false, responsive: true, modeBarButtonsToRemove: ['lasso2d', 'select2d'] };
 
-/* ---------- shell ---------- */
 $('#theme').onclick = () => {
   const cur = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
   document.documentElement.dataset.theme = cur === 'dark' ? 'light' : 'dark';
@@ -151,28 +149,27 @@ function show(tab) {
   state.tab = tab;
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
   document.querySelectorAll('main > section').forEach(s => s.classList.toggle('hidden', s.id !== 'tab-' + tab));
-  if (!state.rendered[tab]) { state.rendered[tab] = true; ({overview, explain, history: historyTab, forecast, scenario, data: dataTab})[tab](); }
+  if (!state.rendered[tab]) { state.rendered[tab] = true; ({overview, explain, history: historyTab, forecast, scenario, data: dataTab, manual})[tab](); }
 }
 
 async function boot() {
   try {
-    state.status = await api('/api/status');
-    const s = state.status;
+    const s = await api('/api/status'); state.status = s;
     const b = $('#banner');
     const noFx = !s.series.some(x => x.series_id === 'USDZMW');
     if (noFx) {
       const r = s.refresh || {};
       const running = !!r.running;
-      b.innerHTML = `<div class="banner"><b>${running ? '⏳ Loading live data' : '⚠ No exchange-rate data yet'}</b><span>${running
-        ? 'Fetching Bank of Zambia, FRED and copper data (about a minute). This page refreshes by itself.'
-        : 'Use the buttons below: load live data, load demo data to explore the app, or upload a file of Bank of Zambia rates.'}</span></div>`;
+      b.innerHTML = `<div class="banner"><b>${running ? 'Loading live data' : 'No exchange-rate data yet'}</b><span>${running
+        ? 'Fetching Bank of Zambia, FRED and Yahoo market feeds.'
+        : 'Use Data &amp; quality below to sync live feeds or upload Bank of Zambia rates.'}</span></div>`;
       show('data');
       if (running) setTimeout(() => location.reload(), 6000);
       return;
     }
-    if (s.mode !== 'live') b.innerHTML = `<div class="banner"><b>⚠ DEMO DATA</b><span>The numbers on screen are synthetic and for development only. They do not describe the real kwacha, copper or Bank of Zambia. Open Data &amp; quality and load live data for real numbers.</span></div>`;
+    if (s.mode !== 'live') b.innerHTML = `<div class="banner"><b>DEMO DATA</b><span>Values are synthetic until live feeds finish loading.</span></div>`;
     const stale = s.series.filter(x => x.stale && !x.is_demo);
-    if (stale.length) b.innerHTML += `<div class="banner"><b>⚠ Stale data</b><span>${stale.map(x => esc(x.series_id) + ' (' + x.age_days + 'd old)').join(', ')}</span></div>`;
+    if (stale.length) b.innerHTML += `<div class="banner"><b>Stale series</b><span>${stale.map(x => esc(x.series_id) + ' (' + x.age_days + 'd old)').join(', ')}</span></div>`;
   } catch (e) { showErr($('#banner'), e); }
   show('overview');
 }
@@ -191,10 +188,14 @@ async function overview() {
         <div class="d">${dd('1w', c.chg_1w)}${dd('4w', c.chg_4w)}${dd('52w', c.chg_52w)}</div>
         <div class="d"><span>${esc(c.unit)} · ${c.date}</span></div></div>`;
     }).join('');
+    const ip = ov.interpretation;
+    const interpCard = ip ? `<div class="card"><h2>Trend &amp; Regime Interpretation</h2>
+      <p class="hint">${esc(ip.trend_label)}${ip.ma12w ? ` · 12w MA ${fmt(ip.ma12w)}` : ''}${ip.ma26w ? ` · 26w MA ${fmt(ip.ma26w)}` : ''}${ip.vol12w_ann_pct ? ` · 12w Ann. Vol ${fmt(ip.vol12w_ann_pct, 1)}%` : ''}</p>
+      <ul class="story">${ip.bullets.map(b => `<li>${esc(b)}</li>`).join('')}</ul></div>` : '';
     const opts = ov.cards.filter(c => c.series_id !== 'USDZMW').map(c => `<option value="${c.series_id}" ${state.compare === c.series_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
-    el.innerHTML = `<div class="grid">${cards}</div>
+    el.innerHTML = `<div class="grid">${cards}</div>${interpCard}
       <div class="card"><h2>USD/ZMW with key events</h2>
-      <p class="hint">Higher = weaker kwacha. Hover the dots for events. Optionally compare with a driver, both rebased to 100 at the start of the window (one shared axis).</p>
+      <p class="hint">Higher = weaker kwacha. Hover event markers or compare against Copper, USD/ZAR, SA Equity (EZA), or Global USD (DXY) rebased to 100.</p>
       <div class="row">${['1Y','3Y','5Y','10Y','ALL'].map(r => `<button class="btn ${state.range === r ? 'sel' : ''}" data-r="${r}">${r}</button>`).join('')}
         <label>Compare with</label><select id="cmp"><option value="">— none —</option>${opts}</select></div>
       <div class="legend" id="ov-legend"></div>
@@ -213,7 +214,6 @@ async function drawOverview(events) {
   const fx = s.USDZMW; if (!fx) return;
   const traces = [];
   const rebase = !!state.compare && s[state.compare];
-  const base = v => v;
   if (rebase) {
     const b0 = fx.values[0], c0 = s[state.compare].values[0];
     traces.push({ x: fx.dates, y: fx.values.map(v => v / b0 * 100), type: 'scatter', mode: 'lines', name: 'USD/ZMW (=100)', line: { color: css('--s1'), width: 2 } });
@@ -227,7 +227,7 @@ async function drawOverview(events) {
   const ref = traces[0];
   const near = d => { let lo = 0, hi = ref.x.length - 1; while (lo < hi) { const m = (lo + hi) >> 1; if (ref.x[m] < d) lo = m + 1; else hi = m; } return ref.y[lo]; };
   if (inRange.length) traces.push({ x: inRange.map(e => e.date), y: inRange.map(e => near(e.date)), mode: 'markers', type: 'scatter', name: 'Events',
-    marker: { size: 10, color: css('--surface'), line: { color: css('--ink'), width: 2 } }, text: inRange.map(e => `<b>${esc(e.title)}</b><br>${esc(e.category)}${e.verified ? '' : ' · date unverified'}`),
+    marker: { size: 10, color: css('--surface'), line: { color: css('--ink'), width: 2 } }, text: inRange.map(e => `<b>${esc(e.title)}</b><br>${esc(e.category)}`),
     hovertemplate: '%{text}<extra></extra>' });
   Plotly.react('ov-chart', traces, layout({ yaxis: { gridcolor: css('--grid'), linecolor: css('--axis'), title: rebase ? 'Index (start = 100)' : 'ZMW per USD', zeroline: false } }), cfg);
 }
@@ -239,14 +239,16 @@ async function explain() {
   const end = state.lastDate || new Date().toISOString().slice(0, 10);
   const d0 = new Date(end); d0.setDate(d0.getDate() - 182);
   el.innerHTML = `<div class="card"><h2>Pick a window; get a data-backed explanation</h2>
-    <p class="hint">The model attributes the kwacha's move to copper, the dollar, oil and rates, and shows what is left unexplained. These are statistical associations, not proof of cause.</p>
+    <p class="hint">Newey-West HAC regression attributes moves across Copper, USD, South African markets (USD/ZAR, EZA, SA 10Y/3M), EM Bonds, Oil, Yields, and Policy Rate.</p>
     <div class="row"><label>From</label><input type="date" id="ex-s" value="${d0.toISOString().slice(0, 10)}"><label>To</label><input type="date" id="ex-e" value="${end}">
+      <label>Frequency</label><select id="ex-fq"><option value="W-FRI" ${state.freq==='W-FRI'?'selected':''}>Weekly</option><option value="ME" ${state.freq==='ME'?'selected':''}>Monthly (incl. CPI &amp; SA yields)</option></select>
       <button class="btn primary" id="ex-go">Explain</button>
       <button class="btn" data-m="3">3m</button><button class="btn" data-m="6">6m</button><button class="btn" data-m="12">12m</button><button class="btn" data-m="36">3y</button></div>
     <div class="row"><label>Jump to an event (±13 weeks):</label></div>
-    <div class="evlist">${ev.map(e => `<button class="btn" data-ev="${esc(e.date)}" title="${esc(e.title)}">${esc(e.date)} · ${esc(e.title.slice(0, 38))}</button>`).join('') || '<span class="hint">No events loaded.</span>'}</div></div>
+    <div class="evlist">${ev.slice(-14).map(e => `<button class="btn" data-ev="${esc(e.date)}" title="${esc(e.title)}">${esc(e.date)} · ${esc(e.title.slice(0, 36))}</button>`).join('') || '<span class="hint">No events loaded.</span>'}</div></div>
     <div id="ex-out"></div>`;
   $('#ex-go').onclick = runExplain;
+  $('#ex-fq').onchange = e => { state.freq = e.target.value; runExplain(); };
   el.querySelectorAll('[data-m]').forEach(b => b.onclick = () => { const e = new Date($('#ex-e').value); e.setMonth(e.getMonth() - +b.dataset.m); $('#ex-s').value = e.toISOString().slice(0, 10); runExplain(); });
   el.querySelectorAll('[data-ev]').forEach(b => b.onclick = () => {
     const d = new Date(b.dataset.ev), a = new Date(d), z = new Date(d); a.setDate(a.getDate() - 91); z.setDate(z.getDate() + 91);
@@ -257,43 +259,49 @@ async function explain() {
 async function runExplain() {
   const out = $('#ex-out'); out.innerHTML = '<p class="hint">Analysing…</p>';
   try {
-    const r = await api(`/api/explain?start=${$('#ex-s').value}&end=${$('#ex-e').value}`);
+    const r = await api(`/api/explain?start=${$('#ex-s').value}&end=${$('#ex-e').value}&freq=${state.freq}`);
     const items = r.drivers.map(d => ({ label: d.label + (d.significant ? '' : ' (n.s.)'), v: d.contribution_pp }));
     items.push({ label: 'Baseline drift', v: r.drift_pp }, { label: 'Unexplained', v: r.unexplained_pp });
     items.sort((a, b) => Math.abs(a.v) - Math.abs(b.v));
     const total = r.log_change_pp;
+    const rc = r.regime_comparison;
     out.innerHTML = `<div class="two"><div class="card"><h2>${sgn(r.change_pct)}% &nbsp;<span class="sub">USD/ZMW ${fmt(r.level_start)} → ${fmt(r.level_end)} · ${r.start} to ${r.end}</span></h2>
         <ul class="story">${r.narrative.map(n => `<li>${esc(n)}</li>`).join('')}</ul></div>
       <div class="card"><h2>What contributed (percentage points)</h2><p class="hint">Contributions sum to the total move (${sgn(total)}pp in log terms). Red = weaker kwacha, blue = stronger.</p>
         <div class="legend"><span><i style="background:var(--weak)"></i>Pushed USD/ZMW up (weaker kwacha)</span><span><i style="background:var(--strong)"></i>Pushed it down (stronger kwacha)</span></div>
         <div id="ex-bars" class="chart short"></div></div></div>
+      <div class="two">${r.interpretation_guide ? `<div class="card"><h2>How to Interpret Attribution Results</h2><ul class="story">${r.interpretation_guide.map(g => `<li>${esc(g)}</li>`).join('')}</ul></div>` : ''}
+        ${rc ? `<div class="card"><h2>Regime Check: ${esc(rc.label)} (R² ${fmt(rc.r2)}, n=${rc.n})</h2><table><tr><th>Top Post-2022 Driver</th><th class="num">Regime β</th><th class="num">p-value</th></tr>
+          ${rc.top_drivers.map(d => `<tr><td>${esc(d.label)}</td><td class="num">${fmt(d.beta, 3)}</td><td class="num">${d.p_value < 0.001 ? '&lt;0.001' : fmt(d.p_value, 3)}${d.p_value < 0.01 ? ' **' : d.p_value < 0.05 ? ' *' : ''}</td></tr>`).join('')}</table></div>` : ''}</div>
       <div class="card"><h2>USD/ZMW in and around the window</h2><div id="ex-line" class="chart short"></div></div>
-      <div class="two"><div class="card"><h2>Driver detail</h2><table><tr><th>Driver</th><th class="num">Move</th><th class="num">Sensitivity β</th><th class="num">Contribution</th><th>Signif.</th></tr>
-        ${r.drivers.map(d => `<tr><td>${esc(d.label)}</td><td class="num">${sgn(d.driver_move)}${d.driver_move_unit}</td><td class="num">${fmt(d.beta, 3)}</td><td class="num">${sgn(d.contribution_pp)}pp</td><td>${d.significant ? 'yes' : 'no'}</td></tr>`).join('')}</table>
-        <p class="hint">β: a 1% rise in copper is associated with a β% change in USD/ZMW (for rates: per percentage point).</p></div>
-      <div class="card"><h2>Biggest single periods</h2><table><tr><th>Week ending</th><th class="num">Move</th><th>Lined up with</th></tr>
+      <div class="two"><div class="card"><h2>Driver detail</h2><table><tr><th>Driver</th><th class="num">Move</th><th class="num">Sensitivity β</th><th class="num">Contribution</th><th>Conf.</th></tr>
+        ${r.drivers.map(d => `<tr><td>${esc(d.label)}</td><td class="num">${sgn(d.driver_move)}${d.driver_move_unit}</td><td class="num">${fmt(d.beta, 3)}</td><td class="num">${sgn(d.contribution_pp)}pp</td><td>${d.p_value < 0.01 ? '99% **' : d.significant ? '95% *' : 'n.s.'}</td></tr>`).join('')}</table>
+        <p class="hint">** = 99% confidence (p &lt; 0.01); * = 95% confidence (p &lt; 0.05).</p></div>
+      <div class="card"><h2>Biggest single periods</h2><table><tr><th>Period ending</th><th class="num">Move</th><th>Lined up with</th></tr>
         ${r.top_periods.map(p => `<tr><td>${p.date}</td><td class="num">${sgn(p.move_pct)}%</td><td>${esc(p.dominant_driver)}${p.events.length ? '<br><span class="tag">event</span> ' + esc(p.events.join('; ')) : ''}</td></tr>`).join('')}</table>
         ${r.shocks && r.shocks.length ? `<h2 style="margin-top:14px">Largest unexplained shocks (all history)</h2><table>${r.shocks.slice(-6).map(s => `<tr><td>${s.date}</td><td class="num">${sgn(s.unexplained_pct)}%</td><td>${esc(s.events.join('; ') || 'no event on file')}</td></tr>`).join('')}</table>` : ''}</div></div>`;
     Plotly.react('ex-bars', [{ type: 'bar', orientation: 'h', x: items.map(i => i.v), y: items.map(i => i.label),
       marker: { color: items.map(i => i.v > 0 ? css('--weak') : css('--strong')) }, text: items.map(i => sgn(i.v) + 'pp'), textposition: 'outside', cliponaxis: false, hoverinfo: 'skip' }],
-      layout({ margin: { l: 150, r: 50, t: 6, b: 30 }, hovermode: 'closest', xaxis: { gridcolor: css('--grid'), zeroline: true, zerolinecolor: css('--axis'), title: 'pp' } }), cfg);
+      layout({ margin: { l: 170, r: 50, t: 6, b: 30 }, hovermode: 'closest', xaxis: { gridcolor: css('--grid'), zeroline: true, zerolinecolor: css('--axis'), title: 'pp' } }), cfg);
     const pad = 91, a = new Date(r.start), z = new Date(r.end); a.setDate(a.getDate() - pad); z.setDate(z.getDate() + pad);
     const s = await api(`/api/series?ids=USDZMW&start=${a.toISOString().slice(0, 10)}&end=${z.toISOString().slice(0, 10)}`);
     const evs = (await api('/api/events')).events.filter(e => e.date >= s.USDZMW.dates[0] && e.date <= s.USDZMW.dates.at(-1));
     Plotly.react('ex-line', [{ x: s.USDZMW.dates, y: s.USDZMW.values, type: 'scatter', mode: 'lines', line: { color: css('--s1'), width: 2 }, name: 'USD/ZMW' }],
       layout({ shapes: [{ type: 'rect', xref: 'x', yref: 'paper', x0: r.start, x1: r.end, y0: 0, y1: 1, fillcolor: css('--s1'), opacity: .08, line: { width: 0 } }].concat(evs.map(e => ({ type: 'line', xref: 'x', yref: 'paper', x0: e.date, x1: e.date, y0: 0, y1: 1, line: { color: css('--muted'), width: 1, dash: 'dot' } }))),
-        annotations: evs.map((e, i) => ({ x: e.date, y: 1, yref: 'paper', text: esc(e.title.slice(0, 26)), showarrow: false, textangle: -90, xanchor: 'right', yanchor: 'top', font: { size: 10, color: css('--muted') } })) }), cfg);
+        annotations: evs.map(e => ({ x: e.date, y: 1, yref: 'paper', text: esc(e.title.slice(0, 26)), showarrow: false, textangle: -90, xanchor: 'right', yanchor: 'top', font: { size: 10, color: css('--muted') } })) }), cfg);
   } catch (e) { showErr(out, e); }
 }
 
-/* ---------- forecast ---------- */
+/* ---------- forecast (50%, 95% & 99% CIs) ---------- */
 async function forecast() {
   const el = $('#tab-forecast');
-  el.innerHTML = `<div class="card"><h2>Forecast with uncertainty and a track record</h2>
-    <p class="hint">The shaded fan is where the kwacha has historically landed — not a promise. Every model is re-tested on past data it had not seen, and the result is shown below. If nothing beats a random walk, the forecast says so.</p>
-    <div class="row"><label>Horizon (weeks)</label><select id="fc-h">${[4, 8, 12, 26].map(h => `<option ${h == state.fcH ? 'selected' : ''}>${h}</option>`).join('')}</select>
+  el.innerHTML = `<div class="card"><h2>Forecast with 95%–99% Empirical Confidence Intervals</h2>
+    <p class="hint">Out-of-sample rolling backtests verify empirical coverage across 50% core, 95% risk, and 99% extreme tail bands.</p>
+    <div class="row"><label>Frequency</label><select id="fc-fq"><option value="W-FRI" ${state.freq==='W-FRI'?'selected':''}>Weekly</option><option value="ME" ${state.freq==='ME'?'selected':''}>Monthly</option></select>
+      <label>Horizon</label><select id="fc-h">${[4, 8, 12, 26].map(h => `<option ${h == state.fcH ? 'selected' : ''}>${h}</option>`).join('')}</select>
       <label>Model</label><select id="fc-m">${[['auto', 'Auto (best in backtest)'], ['rw', 'Random walk'], ['driver', 'Drivers'], ['blend', 'Blend']].map(([v, l]) => `<option value="${v}" ${v == state.fcModel ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
-    <div id="fc-out"><p class="hint">Fitting and backtesting… this can take a few seconds.</p></div></div>`;
+    <div id="fc-out"><p class="hint">Fitting and backtesting…</p></div></div>`;
+  $('#fc-fq').onchange = e => { state.freq = e.target.value; runForecast(); };
   $('#fc-h').onchange = e => { state.fcH = +e.target.value; runForecast(); };
   $('#fc-m').onchange = e => { state.fcModel = e.target.value; runForecast(); };
   runForecast();
@@ -301,33 +309,36 @@ async function forecast() {
 async function runForecast() {
   const out = $('#fc-out');
   try {
-    const f = await api(`/api/forecast?h=${state.fcH}&model=${state.fcModel}`);
-    const hist = await api(`/api/series?ids=USDZMW&start=${new Date(new Date(f.last_date).getTime() - 365 * 864e5).toISOString().slice(0, 10)}`);
+    const f = await api(`/api/forecast?h=${state.fcH}&model=${state.fcModel}&freq=${state.freq}`);
+    const lookDays = state.freq === 'W-FRI' ? 365 : 730;
+    const hist = await api(`/api/series?ids=USDZMW&start=${new Date(new Date(f.last_date).getTime() - lookDays * 864e5).toISOString().slice(0, 10)}`);
     const P = f.path, d = P.map(p => p.date);
     const rgba = (v, a) => { const c = css(v); return c.startsWith('#') ? `rgba(${parseInt(c.slice(1, 3), 16)},${parseInt(c.slice(3, 5), 16)},${parseInt(c.slice(5, 7), 16)},${a})` : c; };
     const band = (lo, hi, a, name) => [{ x: d, y: P.map(p => p[lo]), mode: 'lines', line: { width: 0 }, hoverinfo: 'skip', showlegend: false },
       { x: d, y: P.map(p => p[hi]), mode: 'lines', line: { width: 0 }, fill: 'tonexty', fillcolor: rgba('--s1', a), name, hoverinfo: 'skip' }];
     const tr = [{ x: hist.USDZMW.dates, y: hist.USDZMW.values, mode: 'lines', line: { color: css('--s1'), width: 2 }, name: 'USD/ZMW', hovertemplate: '%{y:.3f}' },
-      ...band('q05', 'q95', .14, '90% range'), ...band('q25', 'q75', .28, '50% range'),
-      { x: [f.last_date].concat(d), y: [f.last_level].concat(P.map(p => p.mid)), mode: 'lines', line: { color: css('--s1'), width: 2, dash: 'dash' }, name: 'Centre', hovertemplate: '%{y:.3f}' }];
+      ...band('q005', 'q995', .08, '99% CI'), ...band('q025', 'q975', .16, '95% CI'), ...band('q25', 'q75', .30, '50% core'),
+      { x: [f.last_date].concat(d), y: [f.last_level].concat(P.map(p => p.mid)), mode: 'lines', line: { color: css('--s1'), width: 2, dash: 'dash' }, name: 'Median', hovertemplate: '%{y:.3f}' }];
     const L = P.at(-1);
     const sel = f.backtest_summary.filter(r => r.model === f.model);
     const sk = sel.length ? sel.reduce((a, r) => a + (r.skill_vs_rw || 0), 0) / sel.length : 0;
+    const u = state.freq === 'W-FRI' ? 'w' : 'm';
     const verdict = f.model === 'rw' || sk <= 0.005
-      ? `<b>No demonstrated edge.</b> In backtests the models did not beat a simple "no change" benchmark. Treat the centre line as a placeholder and use the <b>range</b> for planning — that part is well calibrated (see coverage below).`
-      : `<b>Some demonstrated edge.</b> This model reduced average error by ${(sk * 100).toFixed(1)}% vs. the random-walk benchmark in backtests. Still use the range, not a single number.`;
-    out.innerHTML = `<div class="legend"><span><i style="background:var(--s1)"></i>History &amp; centre</span><span><i style="background:${rgba('--s1', .28)}"></i>50% range</span><span><i style="background:${rgba('--s1', .14)}"></i>90% range</span></div>
+      ? `<b>Benchmark Verdict:</b> No demonstrated directional edge over random walk; centre stays flat and the 95%–99% quantile bands carry the risk range.`
+      : `<b>Benchmark Verdict:</b> ${(sk * 100).toFixed(1)}% lower out-of-sample MAE than random walk in rolling backtests.`;
+    out.innerHTML = `<div class="legend"><span><i style="background:var(--s1)"></i>History &amp; median</span><span><i style="background:${rgba('--s1', .30)}"></i>50% core</span><span><i style="background:${rgba('--s1', .16)}"></i>95% CI</span><span><i style="background:${rgba('--s1', .08)}"></i>99% CI</span></div>
       <div id="fc-chart" class="chart"></div>
-      <div class="verdict">${verdict}<br><span class="sub">Model used: <b>${esc(f.model)}</b>. ${esc(f.model_reason)}</span></div>
+      <div class="verdict">${verdict}<br><span class="sub">Active model: <b>${esc(f.model)}</b> · ${esc(f.model_reason)}</span></div>
       <div class="grid"><div class="stat"><div class="n">Latest (${f.last_date})</div><div class="v">${fmt(f.last_level)}</div></div>
-        <div class="stat"><div class="n">In ${f.horizon} weeks: centre</div><div class="v">${fmt(L.mid)}</div><div class="d">${sgn(L.change_pct)}% vs now</div></div>
-        <div class="stat"><div class="n">50% range</div><div class="v" style="font-size:20px">${fmt(L.q25)} – ${fmt(L.q75)}</div></div>
-        <div class="stat"><div class="n">90% range</div><div class="v" style="font-size:20px">${fmt(L.q05)} – ${fmt(L.q95)}</div></div></div>
-      ${f.drivers.length ? `<h2>What the driver model is leaning on (${f.horizon}w, last ${f.lookback_periods} weeks of moves)</h2><table><tr><th>Input</th><th class="num">Recent move</th><th class="num">Pull on USD/ZMW</th></tr>${f.drivers.map(x => `<tr><td>${esc(x.label)}</td><td class="num">${sgn(x.recent_move)}${x.unit}</td><td class="num">${sgn(x.pull_pct, 2)}%</td></tr>`).join('')}</table>` : ''}
-      <h2 style="margin-top:16px">Backtest track record</h2>
-      <p class="hint">Re-fit at each past date using only the data available then. <b>Skill</b> &gt; 0 = lower error than random walk. <b>t-stat</b> beyond ±2 suggests the difference is real, not luck. <b>90% cover</b> should be near 90%.</p>
-      <table><tr><th>Horizon</th><th>Model</th><th class="num">Avg error</th><th class="num">Skill vs RW</th><th class="num">t-stat</th><th class="num">Direction hit</th><th class="num">90% cover</th><th class="num">50% cover</th><th class="num">Tests</th></tr>
-      ${f.backtest_summary.sort((a, b) => a.h - b.h || ['rw', 'driver', 'blend'].indexOf(a.model) - ['rw', 'driver', 'blend'].indexOf(b.model)).map(r => `<tr><td>${r.h}w</td><td>${r.model}</td><td class="num">${fmt(r.mae_pct)}%</td><td class="num">${r.model === 'rw' ? '–' : sgn(r.skill_vs_rw * 100, 1) + '%'}</td><td class="num">${r.dm_t == null ? '–' : fmt(r.dm_t, 1)}</td><td class="num">${r.direction_hit == null ? '–' : (r.direction_hit * 100).toFixed(0) + '%'}</td><td class="num">${(r.coverage90 * 100).toFixed(0)}%</td><td class="num">${(r.coverage50 * 100).toFixed(0)}%</td><td class="num">${r.n}</td></tr>`).join('')}</table>`;
+        <div class="stat"><div class="n">Median (${f.horizon}${u})</div><div class="v">${fmt(L.mid)}</div><div class="d">${sgn(L.change_pct)}% · 50% core ${fmt(L.q25)}–${fmt(L.q75)}</div></div>
+        <div class="stat"><div class="n">95% Confidence Interval</div><div class="v" style="font-size:20px">${fmt(L.q025)} – ${fmt(L.q975)}</div></div>
+        <div class="stat"><div class="n">99% Confidence Interval</div><div class="v" style="font-size:20px">${fmt(L.q005)} – ${fmt(L.q995)}</div></div></div>
+      ${f.interpretation ? `<div class="verdict"><b>How to Interpret:</b> ${esc(f.interpretation.calibration_status)} · ${esc(f.interpretation.band_skew_label)}<ul class="story" style="margin-top:6px">${f.interpretation.bullets.map(b => `<li>${esc(b)}</li>`).join('')}</ul></div>` : ''}
+      ${f.drivers.length ? `<h2>Driver Momentum Inputs (${f.horizon}${u}, ${f.lookback_periods}-period lookback)</h2><table><tr><th>Input</th><th class="num">Recent move</th><th class="num">Pull on USD/ZMW</th></tr>${f.drivers.map(x => `<tr><td>${esc(x.label)}</td><td class="num">${sgn(x.recent_move)}${x.unit}</td><td class="num">${sgn(x.pull_pct, 2)}%</td></tr>`).join('')}</table>` : ''}
+      <h2 style="margin-top:16px">Rolling-Origin Backtest Calibration</h2>
+      <p class="hint">95% cover should track ~95% and 99% cover should track ~98%–99% out-of-sample.</p>
+      <table><tr><th>Horizon</th><th>Model</th><th class="num">MAE</th><th class="num">Skill vs RW</th><th class="num">DM t-stat</th><th class="num">Dir hit</th><th class="num">95% cover</th><th class="num">99% cover</th><th class="num">50% cover</th><th class="num">Origins</th></tr>
+      ${f.backtest_summary.sort((a, b) => a.h - b.h || ['rw', 'driver', 'blend'].indexOf(a.model) - ['rw', 'driver', 'blend'].indexOf(b.model)).map(r => `<tr><td>${r.h}${u}</td><td>${r.model}</td><td class="num">${fmt(r.mae_pct)}%</td><td class="num">${r.model === 'rw' ? '–' : sgn(r.skill_vs_rw * 100, 1) + '%'}</td><td class="num">${r.dm_t == null ? '–' : fmt(r.dm_t, 1)}</td><td class="num">${r.direction_hit == null ? '–' : (r.direction_hit * 100).toFixed(0) + '%'}</td><td class="num">${(r.coverage95 * 100).toFixed(1)}%</td><td class="num">${(r.coverage99 * 100).toFixed(1)}%</td><td class="num">${(r.coverage50 * 100).toFixed(0)}%</td><td class="num">${r.n}</td></tr>`).join('')}</table>`;
     Plotly.react('fc-chart', tr, layout({ yaxis: { gridcolor: css('--grid'), linecolor: css('--axis'), title: 'ZMW per USD', zeroline: false } }), cfg);
   } catch (e) { showErr(out, e); }
 }
@@ -339,7 +350,7 @@ async function scenario() {
     const p = await api('/api/scenario/presets');
     const av = (await api('/api/model')).drivers;
     el.innerHTML = `<div class="card"><h2>What if…? Shock a driver, see the likely kwacha response</h2>
-      <p class="hint">Uses the sensitivities estimated from history. It answers "if copper fell 20%, how has USD/ZMW typically moved?" — not "will copper fall". Shocks: prices in % change, rates in basis points.</p>
+      <p class="hint">Shocks: prices in % change, rates in basis points. Now includes South African &amp; EM market spillover presets.</p>
       <div class="row">${p.presets.map(x => `<button class="btn" data-p='${esc(JSON.stringify(x.shocks))}'>${esc(x.label)}</button>`).join('')}</div>
       <div class="row">${av.map(d => `<label>${esc(d.label)}</label><input type="number" step="any" data-d="${d.driver}" placeholder="${p.drivers.find(x => x.driver === d.driver)?.kind === 'rate' ? 'bp' : '%'}">`).join('')}</div>
       <div class="row"><label>Horizon (weeks)</label><input type="number" id="sc-h" value="12" min="1" max="52"><label>Sensitivity window (weeks)</label><input type="number" id="sc-w" value="156" min="60" max="1000">
@@ -361,16 +372,16 @@ async function runScenario() {
     const r = await api('/api/scenario', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ shocks, horizon: +$('#sc-h').value, window: +$('#sc-w').value }) });
     out.innerHTML = `<div class="card"><div class="grid" style="margin-bottom:8px">
       <div class="stat"><div class="n">Typical USD/ZMW response over ${r.horizon} weeks</div><div class="v big">${sgn(r.impact_pct)}%</div><div class="d">${fmt(r.last_level)} → ${fmt(r.impact_level)}</div></div>
-      <div class="stat"><div class="n">80% range</div><div class="v" style="font-size:20px">${sgn(r.bands['80'].low_pct)}% to ${sgn(r.bands['80'].high_pct)}%</div><div class="d">${fmt(r.bands['80'].low_level)} – ${fmt(r.bands['80'].high_level)}</div></div>
-      <div class="stat"><div class="n">95% range</div><div class="v" style="font-size:20px">${sgn(r.bands['95'].low_pct)}% to ${sgn(r.bands['95'].high_pct)}%</div><div class="d">${fmt(r.bands['95'].low_level)} – ${fmt(r.bands['95'].high_level)}</div></div></div>
+      <div class="stat"><div class="n">80% range</div><div class="v" style="font-size:19px">${sgn(r.bands['80'].low_pct)}% to ${sgn(r.bands['80'].high_pct)}%</div><div class="d">${fmt(r.bands['80'].low_level)} – ${fmt(r.bands['80'].high_level)}</div></div>
+      <div class="stat"><div class="n">95% range</div><div class="v" style="font-size:19px">${sgn(r.bands['95'].low_pct)}% to ${sgn(r.bands['95'].high_pct)}%</div><div class="d">${fmt(r.bands['95'].low_level)} – ${fmt(r.bands['95'].high_level)}</div></div>
+      <div class="stat"><div class="n">99% range</div><div class="v" style="font-size:19px">${sgn(r.bands['99'].low_pct)}% to ${sgn(r.bands['99'].high_pct)}%</div><div class="d">${fmt(r.bands['99'].low_level)} – ${fmt(r.bands['99'].high_level)}</div></div></div>
       <p class="hint">${esc(r.reading)}</p>
-      ${r.warnings.map(w => `<div class="banner"><b>⚠ Caution</b><span>${esc(w)}</span></div>`).join('')}
+      ${r.warnings.map(w => `<div class="banner"><b>Caution</b><span>${esc(w)}</span></div>`).join('')}
       <table><tr><th>Driver shocked</th><th class="num">Contribution</th></tr>${r.by_driver.map(d => `<tr><td>${esc(d.label)}</td><td class="num">${sgn(d.impact_pp, 2)}pp</td></tr>`).join('')}</table>
-      <h2 style="margin-top:14px">Does it depend on the period used?</h2>
+      <h2 style="margin-top:14px">Regime Sensitivity Check</h2>
       <table><tr><th>Sensitivities estimated on</th><th class="num">Response</th><th class="num">Model R²</th><th class="num">Periods</th></tr>
       <tr><td>Recent ${r.window} weeks</td><td class="num">${sgn(r.recent.impact_pct)}%</td><td class="num">${fmt(r.recent.r2)}</td><td class="num">${r.recent.n}</td></tr>
-      <tr><td>Full history</td><td class="num">${sgn(r.full_history.impact_pct)}%</td><td class="num">${fmt(r.full_history.r2)}</td><td class="num">${r.full_history.n}</td></tr></table>
-      <p class="hint">If these two rows disagree, the relationship has changed over time (e.g. before vs after debt restructuring): lean on the wider range.</p></div>`;
+      <tr><td>Full history</td><td class="num">${sgn(r.full_history.impact_pct)}%</td><td class="num">${fmt(r.full_history.r2)}</td><td class="num">${r.full_history.n}</td></tr></table></div>`;
   } catch (e) { showErr(out, e); }
 }
 
@@ -389,18 +400,15 @@ async function historyTab() {
     const rows = h.episodes.map(e => {
       const top = e.drivers.filter(d => Math.abs(d.contribution_pp) >= 0.5).slice(0, 3).map(d => `${esc(d.label)} ${pp(d.contribution_pp)}pp${d.significant ? '' : '?'}`).join('<br>');
       return `<tr><td>${e.start}<br><span class="sub">→ ${e.end} · ${e.periods}w</span></td>
-        <td class="num"><b>${e.change_pct >= 0 ? '▲ weaker' : '▼ stronger'} ${Math.abs(e.change_pct).toFixed(1)}%</b><br><span class="sub">${e.level_start.toFixed(2)} → ${e.level_end.toFixed(2)}</span></td>
+        <td class="num"><b>${e.change_pct >= 0 ? 'weaker' : 'stronger'} ${Math.abs(e.change_pct).toFixed(1)}%</b><br><span class="sub">${e.level_start.toFixed(2)} → ${e.level_end.toFixed(2)}</span></td>
         <td>${esc(e.dominant)}${e.in_model_sample ? '' : ' <span class="tag demo">before model data</span>'}<br><span class="sub">${top || '–'}</span></td>
         <td class="num">${pp(e.unexplained_pp)}pp</td><td>${e.events.map(esc).join('<br>') || '<span class="sub">–</span>'}</td></tr>`;
     }).join('');
     el.innerHTML = `<div class="card"><h2>What drove the kwacha across its history</h2>
-      <p class="hint">The history from ${h.data_start} to ${h.data_end} is split into sustained swings (a new swing starts when the rate reverses by more than ${h.threshold_pct}%). Each swing is attributed with one model fitted on ${h.model.sample[0]} → ${h.model.sample[1]} (R² ${h.model.r2.toFixed(2)}; drivers: ${h.model.drivers.map(esc).join(', ')}). Associations, not proven causes. A “?” means the link is not statistically significant.</p>
-      <div class="row"><label>Swing size</label>${[5, 8, 12, 20].map(t => `<button class="btn ${(state.hthr || 8) === t ? 'sel' : ''}" data-t="${t}">${t}%</button>`).join('')}</div>
-      ${h.model.excluded.length ? `<div class="banner"><b>Not in the model</b><span>${h.model.excluded.map(x => esc(x.driver) + ' (' + esc(x.reason) + ')').join('; ')}</span></div>` : ''}</div>
-      <div class="card"><h2>Overall: which drivers explain the swings</h2>
-      <p class="hint">Average size of each driver's contribution across the ${h.covered_episodes} swings that fall inside the model's data. “Unexplained” is the part no tracked driver accounts for, typically domestic policy, debt news and flows.</p>
-      <table><tr><th>Driver</th><th class="num">Share</th><th class="num">Avg. contribution</th></tr>${sum}</table></div>
-      <div class="card"><h2>Calendar years</h2><p class="hint">Percentage points of USD/ZMW change each year, by driver. Bars add up to the year's total move.</p><div id="hy-chart" class="chart"></div></div>
+      <p class="hint">From ${h.data_start} to ${h.data_end} (reversal threshold ${h.threshold_pct}%). Model R² ${h.model.r2.toFixed(2)} over ${h.model.sample[0]} → ${h.model.sample[1]}.</p>
+      <div class="row"><label>Swing size</label>${[5, 8, 12, 20].map(t => `<button class="btn ${(state.hthr || 8) === t ? 'sel' : ''}" data-t="${t}">${t}%</button>`).join('')}</div></div>
+      <div class="card"><h2>Driver Share Summary</h2><table><tr><th>Driver</th><th class="num">Share</th><th class="num">Avg. contribution</th></tr>${sum}</table></div>
+      <div class="card"><h2>Calendar years</h2><div id="hy-chart" class="chart"></div></div>
       <div class="card"><h2>Every major swing</h2><div style="overflow-x:auto"><table><tr><th>Window</th><th class="num">Move</th><th>Main driver</th><th class="num">Unexplained</th><th>Events</th></tr>${rows}</table></div></div>`;
     el.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { state.hthr = +b.dataset.t; state.rendered.history = false; show('history'); });
     const yrs = h.years.map(y => String(y.year));
@@ -417,68 +425,43 @@ async function dataTab() {
   try {
     const [s, m] = await Promise.all([api('/api/status'), api('/api/model').catch(() => null)]);
     const rf = s.refresh || {};
-    const rfLine = rf.enabled ? `<p class="hint">Automatic refresh every ${rf.interval_hours}h. ${rf.running ? 'Running now…' : 'Last run finished ' + esc(rf.last_end || '–') + ' (UTC)'}${rf.last_failed && rf.last_failed.length ? '. <b>Failed sources:</b> ' + esc(rf.last_failed.join(', ')) : ''}.</p>` : '';
+    const rfLine = rf.enabled ? `<p class="hint">Automatic refresh every ${rf.interval_hours}h. ${rf.running ? 'Running now…' : 'Last run finished ' + esc(rf.last_end || '–') + ' (UTC)'}${rf.last_failed && rf.last_failed.length ? '. <b>Failed:</b> ' + esc(rf.last_failed.join(', ')) : ''}.</p>` : '';
     const locked = s.controls_locked;
     const noRealFx = !s.series.some(x => x.series_id === 'USDZMW' && !x.is_demo);
     const problems = (s.problems || []).map(p => `<tr><td>${esc(p.series_id)}</td><td><span class="tag ${p.status === 'error' ? 'bad' : ''}">${esc(p.status)}</span></td><td>${esc(p.message || '')}<br><span class="sub">${esc(p.run_at)} UTC</span></td></tr>`).join('');
-    const loadCard = `<div class="card"><h2>Load data</h2>
-      ${locked ? '<div class="banner"><b>Locked</b><span>Uploads are disabled because this public site has no password. Retry and demo still work. To enable uploads set <code>ZTI_PASSWORD</code> in the Render dashboard (Environment), redeploy, and sign in.</span></div>' : ''}
-      ${problems ? `<h2 style="margin-top:6px">Problems from the last load</h2><table><tr><th>Source / series</th><th>Status</th><th>What happened</th></tr>${problems}</table>` : '<p class="hint">No problems recorded from the last load.</p>'}
-      <div class="row" style="margin-top:12px"><button class="btn primary" id="rf-go">Load live data now</button>
-        ${noRealFx ? '<button class="btn" id="demo-go">Load demo data (synthetic)</button>' : ''}<span id="rf-msg" class="sub"></span></div>
-      <h2 style="margin-top:14px">Or upload a file</h2>
-      <p class="hint">A CSV or Excel (.xlsx) file with a date column and a value column, for example Bank of Zambia's historical exchange rates for USD/ZMW (kwacha per dollar). New rows are merged into what is stored; the same dates are overwritten. Uploaded data is kept until the server restarts, so for permanent data also commit the file to <code>data/manual/&lt;SERIES&gt;.csv</code> in GitHub.</p>
-      <div class="row"><label>Series</label><select id="up-s">${(s.registry || []).map(r => `<option value="${esc(r.series_id)}" ${r.series_id === 'USDZMW' ? 'selected' : ''}>${esc(r.series_id)} · ${esc(r.name)}</option>`).join('')}</select>
-        <input type="file" id="up-f" accept=".csv,.txt,.xlsx">
-        <label>Value column (optional)</label><input id="up-c" placeholder="e.g. Mid" style="width:120px">
-        <label><input type="checkbox" id="up-r"> replace existing</label>
-        <button class="btn primary" id="up-go" ${locked ? 'disabled' : ''}>Upload</button></div>
-      <div id="up-msg" class="sub" style="margin-top:6px"></div></div>`;
-    el.innerHTML = loadCard + `<div class="card"><h2>Data inventory &amp; provenance</h2><p class="hint">Every series, where it came from, and whether it is fresh. Anything marked DEMO is synthetic.</p>${rfLine}
-      <table><tr><th>Series</th><th>Source</th><th class="num">Rows</th><th>From</th><th>To</th><th class="num">Age</th><th>Status</th></tr>
-      ${s.series.map(x => `<tr><td>${esc(x.name)}<br><span class="sub">${esc(x.series_id)} · ${esc(x.unit)}</span></td><td>${esc(x.source)}</td><td class="num">${x.n_obs}</td><td>${x.first_date}</td><td>${x.last_date}</td><td class="num">${x.age_days}d</td>
-        <td>${x.is_demo ? '<span class="tag demo">DEMO</span>' : x.stale ? '<span class="tag bad">stale</span>' : '<span class="tag">ok</span>'}</td></tr>`).join('')}</table></div>
-      ${m ? `<div class="card"><h2>Model inputs in use (weekly)</h2><p class="hint">R² ${fmt(m.r2)} over ${m.n} weeks (${m.sample[0]} → ${m.sample[1]}). Drivers left out are listed with the reason: adding data for them is the fastest way to improve explanations.</p>
-        <table><tr><th>Driver</th><th>Series</th><th class="num">β</th><th class="num">Std err</th><th class="num">p-value</th></tr>${m.drivers.map(d => `<tr><td>${esc(d.label)}</td><td>${esc(d.series)}</td><td class="num">${fmt(d.beta, 3)}</td><td class="num">${fmt(d.se, 3)}</td><td class="num">${fmt(d.p_value, 3)}</td></tr>`).join('')}</table>
-        ${(m.excluded.length || m.skipped.length) ? `<h2 style="margin-top:14px">Not used</h2><table>${m.excluded.map(x => `<tr><td>${esc(x.driver)}</td><td>${esc(x.reason)}</td></tr>`).join('')}${m.skipped.map(x => `<tr><td>${esc(x.series)}</td><td>${esc(x.reason)}</td></tr>`).join('')}</table>` : ''}
-        ${m.rolling && m.rolling.dates ? '<h2 style="margin-top:14px">How sensitivities have shifted (rolling 2-year)</h2><div class="legend" id="rb-leg"></div><div id="rb-chart" class="chart short"></div>' : ''}</div>` : ''}
-      <div class="card"><h2>Recent ingest runs</h2><table><tr><th>When (UTC)</th><th>Series</th><th class="num">Rows</th><th>Status</th><th>Message</th></tr>${s.ingest_log.map(l => `<tr><td>${esc(l.run_at)}</td><td>${esc(l.series_id)}</td><td class="num">${l.rows}</td><td>${esc(l.status)}</td><td>${esc(l.message)}</td></tr>`).join('') || '<tr><td colspan="5" class="sub">No runs logged.</td></tr>'}</table></div>`;
-    $('#rf-go').onclick = async () => {
-      const msg = $('#rf-msg'); msg.textContent = 'Starting…';
-      try {
-        const r = await api('/api/refresh', { method: 'POST' });
-        msg.textContent = r.running ? 'A load is already running…' : 'Loading in the background (about a minute). This page will reload.';
-        setTimeout(() => location.reload(), 45000);
-      } catch (e) { msg.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
-    };
-    if ($('#demo-go')) $('#demo-go').onclick = async () => {
-      const msg = $('#rf-msg'); msg.textContent = 'Loading demo data…';
-      try { await api('/api/demo', { method: 'POST' }); location.reload(); }
-      catch (e) { msg.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
-    };
+    el.innerHTML = `<div class="card"><h2>Load data</h2>
+      ${locked ? '<div class="banner"><b>Locked</b><span>Set <code>ZTI_PASSWORD</code> in Render Environment to enable browser uploads.</span></div>' : ''}
+      ${problems ? `<table><tr><th>Source</th><th>Status</th><th>Detail</th></tr>${problems}</table>` : '<p class="hint">No ingest problems logged.</p>'}
+      <div class="row" style="margin-top:12px"><button class="btn primary" id="rf-go">Load live data now</button>${noRealFx ? '<button class="btn" id="demo-go">Load demo data</button>' : ''}<span id="rf-msg" class="sub"></span></div>
+      <div class="row"><label>Series</label><select id="up-s">${(s.registry || []).map(r => `<option value="${esc(r.series_id)}">${esc(r.series_id)} · ${esc(r.name)}</option>`).join('')}</select>
+        <input type="file" id="up-f" accept=".csv,.txt,.xlsx"><input id="up-c" placeholder="Value col" style="width:110px">
+        <label><input type="checkbox" id="up-r"> replace</label><button class="btn primary" id="up-go" ${locked ? 'disabled' : ''}>Upload</button></div><div id="up-msg" class="sub"></div></div>
+      <div class="card"><h2>Data inventory &amp; provenance</h2>${rfLine}<table><tr><th>Series</th><th>Source</th><th class="num">Rows</th><th>From</th><th>To</th><th class="num">Age</th><th>Status</th></tr>
+      ${s.series.map(x => `<tr><td>${esc(x.name)}<br><span class="sub">${esc(x.series_id)} · ${esc(x.unit)}</span></td><td>${esc(x.source)}</td><td class="num">${x.n_obs}</td><td>${x.first_date}</td><td>${x.last_date}</td><td class="num">${x.age_days}d</td><td>${x.is_demo ? 'DEMO' : x.stale ? 'stale' : 'ok'}</td></tr>`).join('')}</table></div>
+      ${m ? `<div class="card"><h2>Model inputs (R² ${fmt(m.r2)}, n=${m.n})</h2><table><tr><th>Driver</th><th>Series</th><th class="num">β</th><th class="num">Std err</th><th class="num">p-value</th></tr>
+        ${m.drivers.map(d => `<tr><td>${esc(d.label)}</td><td>${esc(d.series)}</td><td class="num">${fmt(d.beta, 3)}</td><td class="num">${fmt(d.se, 3)}</td><td class="num">${fmt(d.p_value, 3)}${d.p_value < 0.01 ? ' **' : d.p_value < 0.05 ? ' *' : ''}</td></tr>`).join('')}</table></div>` : ''}`;
+    $('#rf-go').onclick = async () => { $('#rf-msg').textContent = 'Starting…'; await api('/api/refresh', { method: 'POST' }); setTimeout(() => location.reload(), 20000); };
+    if ($('#demo-go')) $('#demo-go').onclick = async () => { await api('/api/demo', { method: 'POST' }); location.reload(); };
     $('#up-go').onclick = async () => {
-      const f = $('#up-f').files[0], msg = $('#up-msg');
-      if (!f) { msg.innerHTML = '<span class="err">Choose a file first.</span>'; return; }
-      msg.textContent = 'Uploading…';
+      const f = $('#up-f').files[0]; if (!f) return;
       const q = new URLSearchParams({ series_id: $('#up-s').value, filename: f.name, replace: $('#up-r').checked });
       if ($('#up-c').value.trim()) q.set('value_col', $('#up-c').value.trim());
-      try {
-        const r = await api('/api/upload?' + q, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: await f.arrayBuffer() });
-        const u = r.upload;
-        msg.innerHTML = `<b>Loaded.</b> Stored ${r.stored_rows} rows of ${esc(r.series_id)} (${u.first} → ${u.last}). Date column “${esc(u.date_column)}”, value column “${esc(u.value_column)}”` +
-          (u.numeric_columns.length > 1 ? ` (other numeric columns: ${esc(u.numeric_columns.filter(c => c !== u.value_column).join(', '))}; type one in “Value column” to switch)` : '') +
-          `. Latest: ${u.sample.map(x => x.date + ' = ' + x.value).join('; ')}.` + (r.quality.length ? '<br>Notes: ' + r.quality.map(x => esc(x.message)).join('; ') : '') +
-          '<br>Reloading…';
-        setTimeout(() => location.reload(), 2500);
-      } catch (e) { msg.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+      await api('/api/upload?' + q, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: await f.arrayBuffer() });
+      location.reload();
     };
-    if (m && m.rolling && m.rolling.dates) {
-      const cols = [css('--s1'), css('--s2'), css('--s3'), css('--s4')]; const keys = Object.keys(m.rolling.betas);
-      $('#rb-leg').innerHTML = keys.map((k, i) => `<span><i style="background:${cols[i % 4]}"></i>${esc(m.drivers.find(d => d.driver === k)?.label || k)}</span>`).join('');
-      Plotly.react('rb-chart', keys.map((k, i) => ({ x: m.rolling.dates, y: m.rolling.betas[k], mode: 'lines', name: k, line: { color: cols[i % 4], width: 2 } })),
-        layout({ yaxis: { gridcolor: css('--grid'), title: 'sensitivity β', zeroline: true, zerolinecolor: css('--axis') } }), cfg);
-    }
   } catch (e) { showErr(el, e); }
+}
+
+/* ---------- user manual ---------- */
+function manual() {
+  $('#tab-manual').innerHTML = `<div class="card"><h2>User Manual &amp; Econometric Interpretation Guide</h2>
+    <p class="hint">How to operate Zambia Treasury Insight and interpret 95%–99% confidence intervals and South African spillover metrics.</p>
+    <table><tr><th>Concept</th><th>Meaning</th><th>How to Read It</th></tr>
+      <tr><td><b>USD/ZMW Sign</b></td><td>Kwacha per 1 US Dollar.</td><td><b>+ / Red</b> = weaker kwacha; <b>− / Blue</b> = stronger kwacha.</td></tr>
+      <tr><td><b>Beta (β) &amp; Confidence</b></td><td>Newey-West HAC OLS sensitivity.</td><td><b>**</b> = 99% confidence (p &lt; 0.01); <b>*</b> = 95% confidence (p &lt; 0.05). Switch to Monthly (ME) to include ZamStats CPI plus South African 3M interbank and 10Y bond yields.</td></tr>
+      <tr><td><b>South African Spillovers</b></td><td>USD/ZAR, SA Equity (EZA), SA 10Y/3M, EM Bonds (EMB).</td><td>Captures regional EM risk repricing &amp; carry spillovers alongside global Copper and DXY.</td></tr>
+      <tr><td><b>50%, 95% &amp; 99% Bands</b></td><td>Student-t guarded empirical residual quantiles.</td><td>Plan cashflows around the <b>50% core</b>, set treasury FX limits with the <b>95% CI</b>, and stress-test extreme tails with the <b>99% CI</b>. Check backtest <b>95% cover</b> and <b>99% cover</b> to verify calibration.</td></tr>
+    </table></div>`;
 }
 
 boot();

@@ -1,4 +1,7 @@
-"""FastAPI app: JSON API + static dashboard.   Run:  uvicorn app.main:app --reload"""
+"""FastAPI app: JSON API + static dashboard.
+
+Run:  uvicorn app.main:app --reload
+"""
 from __future__ import annotations
 
 import base64
@@ -25,8 +28,8 @@ from .scheduler import Refresher
 from .validate import summarize, validate_series
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
-db.init()
 
+db.init()
 _cache: dict = {}
 
 
@@ -39,7 +42,6 @@ refresher = Refresher(after=_warm_cache)
 
 
 def _auto_ingest_enabled() -> bool:
-    """On by default on Render (which sets RENDER); ZTI_AUTO_INGEST=1/0 overrides either way."""
     v = os.environ.get("ZTI_AUTO_INGEST")
     if v is not None:
         return v == "1"
@@ -47,7 +49,6 @@ def _auto_ingest_enabled() -> bool:
 
 
 def _load_seeds_if_empty() -> None:
-    """Offline start-up: policy rate, inflation and events come from files in the repo, so the DB is never blank."""
     try:
         if db.data_mode() == "empty":
             ingest.load_seed_files()
@@ -64,7 +65,7 @@ async def lifespan(_app: FastAPI):
     refresher.stop()
 
 
-app = FastAPI(title="Zambia Treasury Insight", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="Zambia Treasury Insight", version="0.3.0", lifespan=lifespan)
 
 
 @app.middleware("http")
@@ -80,16 +81,18 @@ async def optional_basic_auth(request, call_next):
         try:
             u, _, p = base64.b64decode(header[6:]).decode("utf-8").partition(":")
             ok = secrets.compare_digest(u.encode(), user.encode()) and secrets.compare_digest(p.encode(), password.encode())
-        except Exception:  # noqa: BLE001 - malformed header means not authenticated
+        except Exception:  # noqa: BLE001
             ok = False
     if ok:
         return await call_next(request)
-    return Response("Authentication required", status_code=401,
-                    headers={"WWW-Authenticate": 'Basic realm="Zambia Treasury Insight"'})
+    return Response(
+        "Authentication required",
+        status_code=401,
+        headers={"WWW-Authenticate": 'Basic realm="Zambia Treasury Insight"'},
+    )
 
 
 def cached(fn):
-    """Memoise by (function, args) and invalidate whenever the database file changes."""
     @wraps(fn)
     def inner(*args):
         key = (fn.__name__, args, db.db_stamp())
@@ -98,6 +101,7 @@ def cached(fn):
                 _cache.clear()
             _cache[key] = fn(*args)
         return _cache[key]
+
     return inner
 
 
@@ -133,10 +137,22 @@ def status():
         age = int((today - last).days) if last is not None else None
         reg = SERIES.get(sid, {})
         stale_limit = reg.get("stale_days") or {"D": 7, "E": 200, "W": 14, "M": 75, "Q": 130}.get(reg.get("native", "D"), 14)
-        series.append(dict(series_id=sid, name=m["name"], unit=m["unit"], native=SERIES.get(sid, {}).get("native"),
-                           source=m["source"], is_demo=bool(m["is_demo"]), n_obs=m["n_obs"], first_date=m["first_date"],
-                           last_date=m["last_date"], age_days=age, stale=bool(age is not None and age > stale_limit),
-                           last_fetched=m["last_fetched"]))
+        series.append(
+            dict(
+                series_id=sid,
+                name=m["name"],
+                unit=m["unit"],
+                native=SERIES.get(sid, {}).get("native"),
+                source=m["source"],
+                is_demo=bool(m["is_demo"]),
+                n_obs=m["n_obs"],
+                first_date=m["first_date"],
+                last_date=m["last_date"],
+                age_days=age,
+                stale=bool(age is not None and age > stale_limit),
+                last_fetched=m["last_fetched"],
+            )
+        )
     mode = db.data_mode()
     notes = []
     if mode in ("demo", "mixed"):
@@ -145,11 +161,17 @@ def status():
         notes.append("No USD/ZMW series loaded.")
     if refresher.state.get("last_error"):
         notes.append("Last automatic refresh: " + str(refresher.state["last_error"]))
-    return dict(mode=mode, series=sorted(series, key=lambda s: s["series_id"]), notes=notes,
-                refresh=dict(refresher.state), problems=db.latest_problems(),
-                registry=[dict(series_id=k, name=v["name"], unit=v["unit"], native=v["native"]) for k, v in SERIES.items()],
-                controls_locked=_hosted_unprotected(), ingest_log=db.recent_ingest_log(12),
-                server_time=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    return dict(
+        mode=mode,
+        series=sorted(series, key=lambda s: s["series_id"]),
+        notes=notes,
+        refresh=dict(refresher.state),
+        problems=db.latest_problems(),
+        registry=[dict(series_id=k, name=v["name"], unit=v["unit"], native=v["native"]) for k, v in SERIES.items()],
+        controls_locked=_hosted_unprotected(),
+        ingest_log=db.recent_ingest_log(12),
+        server_time=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    )
 
 
 @app.get("/api/health")
@@ -158,19 +180,20 @@ def health():
 
 
 def _hosted_unprotected() -> bool:
-    """On a public host (Render sets RENDER) without a password, nobody may change data from the browser."""
     return bool(os.environ.get("RENDER")) and not os.environ.get("ZTI_PASSWORD")
 
 
 def _require_controls() -> None:
     if _hosted_unprotected():
-        raise HTTPException(403, "Data controls are disabled on a public host until ZTI_PASSWORD is set "
-                                 "(Render dashboard > Environment). Set it, redeploy, then sign in.")
+        raise HTTPException(
+            403,
+            "Data controls are disabled on a public host until ZTI_PASSWORD is set "
+            "(Render dashboard > Environment). Set it, redeploy, then sign in.",
+        )
 
 
 @app.post("/api/refresh")
 def refresh_now():
-    """Re-run the live data load in the background (same as the automatic refresh)."""
     if refresher.state.get("running"):
         return dict(started=False, running=True)
     threading.Thread(target=refresher.run_once, name="zti-refresh-now", daemon=True).start()
@@ -179,28 +202,29 @@ def refresh_now():
 
 @app.post("/api/demo")
 def load_demo():
-    """One-click synthetic data so the app can be explored. Refused once real USD/ZMW data exists."""
     meta = db.series_meta().get(TARGET)
     if meta and not meta["is_demo"]:
         raise HTTPException(409, "Real USD/ZMW data is already loaded; demo data would only confuse it.")
     from . import demo_data
+
     out = demo_data.load()
     _cache.clear()
     return dict(ok=True, detail=str(out))
 
 
 @app.post("/api/upload")
-async def upload_series(request: Request, series_id: str, filename: str = "", value_col: str | None = None,
-                        replace: bool = False):
-    """Load a CSV/XLSX the user supplies (e.g. a Bank of Zambia rates download) into one series.
-
-    By default the rows are MERGED into any stored real data (same dates are overwritten); replace=true
-    discards what was there. The data passes the same quality gate as automatic feeds."""
+async def upload_series(
+    request: Request,
+    series_id: str,
+    filename: str = "",
+    value_col: str | None = None,
+    replace: bool = False,
+):
     _require_controls()
     if series_id not in SERIES:
         raise HTTPException(404, f"Unknown series {series_id!r}. Known: {', '.join(SERIES)}")
     try:
-        hint = ("usd",) if series_id == "USDZMW" else ()      # multi-currency tables: take the dollar column
+        hint = ("usd",) if series_id == "USDZMW" else ()
         new, info = upload_mod.parse_upload(await request.body(), filename, value_col, prefer=hint)
     except upload_mod.UploadError as e:
         raise HTTPException(422, str(e))
@@ -210,19 +234,116 @@ async def upload_series(request: Request, series_id: str, filename: str = "", va
         new = pd.concat([old, new])
         new = new[~new.index.duplicated(keep="last")].sort_index()
     cleaned, issues = validate_series(series_id, new)
-    status, msg = summarize(issues)
+    status_str, msg = summarize(issues)
     if cleaned is None:
         raise HTTPException(422, msg or "data rejected by the quality checks")
     m = SERIES[series_id]
     db.clear_demo()
-    n = db.upsert_series(series_id, cleaned, name=m["name"], unit=m["unit"], frequency=m["native"],
-                         source=f"upload: {filename or 'file'}", is_demo=False,
-                         notes=f"Uploaded by a user; value column {info['value_column']!r}.")
-    db.log_ingest(series_id, n, status, msg or f"uploaded {info['rows']} rows from {filename or 'file'}")
+    n = db.upsert_series(
+        series_id,
+        cleaned,
+        name=m["name"],
+        unit=m["unit"],
+        frequency=m["native"],
+        source=f"upload: {filename or 'file'}",
+        is_demo=False,
+        notes=f"Uploaded by a user; value column {info['value_column']!r}.",
+    )
+    db.log_ingest(series_id, n, status_str, msg or f"uploaded {info['rows']} rows from {filename or 'file'}")
     if not db.load_events(is_demo=False):
         ingest.load_events()
     _cache.clear()
-    return dict(ok=True, series_id=series_id, stored_rows=n, upload=info, quality=[dict(level=a, message=b) for a, b in issues])
+    return dict(
+        ok=True,
+        series_id=series_id,
+        stored_rows=n,
+        upload=info,
+        quality=[dict(level=a, message=b) for a, b in issues],
+    )
+
+
+def _compute_overview_interpretation(cards: list[dict]) -> dict:
+    spot = float(next((c["last"] for c in cards if c["series_id"] == TARGET), 0.0))
+    ma12 = ma26 = vol12 = vol52 = None
+    range52 = None
+    try:
+        p = build_panel("W-FRI")
+        lvls = p.levels[TARGET].dropna()
+        rets = p.returns[TARGET].dropna()
+        if len(lvls) >= 12:
+            ma12 = float(lvls.iloc[-12:].mean())
+        if len(lvls) >= 26:
+            ma26 = float(lvls.iloc[-26:].mean())
+        if len(lvls) >= 52:
+            w52 = lvls.iloc[-52:]
+            lo, hi = float(w52.min()), float(w52.max())
+            pct = ((spot - lo) / (hi - lo) * 100.0) if hi > lo else 50.0
+            range52 = dict(low=lo, high=hi, percentile=float(min(100.0, max(0.0, pct))))
+        if len(rets) >= 12:
+            vol12 = float(rets.iloc[-12:].std(ddof=1) * np.sqrt(52) * 100.0)
+        if len(rets) >= 52:
+            vol52 = float(rets.iloc[-52:].std(ddof=1) * np.sqrt(52) * 100.0)
+    except Exception:  # noqa: BLE001
+        pass
+
+    trend = "Range-bound"
+    if ma12 is not None and ma26 is not None:
+        if spot > ma12 * 1.015 and ma12 >= ma26:
+            trend = "Depreciating pressure (USD/ZMW above 12w & 26w MAs)"
+        elif spot < ma12 * 0.985 and ma12 <= ma26:
+            trend = "Appreciating trend (USD/ZMW below 12w & 26w MAs)"
+        elif spot > ma12:
+            trend = "Short-term softening inside broader range"
+        else:
+            trend = "Short-term firming inside broader range"
+
+    by_id = {c["series_id"]: c for c in cards}
+    bullets: list[str] = []
+    fx = by_id.get(TARGET)
+    if fx:
+        yoy = f"weaker by +{abs(fx['chg_52w']):.1f}%" if (fx["chg_52w"] or 0) >= 0 else f"stronger by {abs(fx['chg_52w']):.1f}%"
+        rng_txt = (
+            f" Spot sits at the {range52['percentile']:.0f}th percentile of its 52-week range ({range52['low']:.2f}–{range52['high']:.2f})."
+            if range52
+            else ""
+        )
+        bullets.append(
+            f"Kwacha Position: Trading at {spot:.2f} ZMW/USD ({yoy if fx['chg_52w'] is not None else 'active'} over 52w).{rng_txt}"
+        )
+    if vol12 is not None and vol52 is not None:
+        comp = (
+            "elevated vs 1-year baseline (wider hedging cushions warranted)"
+            if vol12 > vol52 * 1.15
+            else ("calmer than 1-year average" if vol12 < vol52 * 0.85 else "in line with 1-year norms")
+        )
+        bullets.append(f"Volatility Regime: 12w annualized volatility is {vol12:.1f}% vs {vol52:.1f}% over 52w — {comp}.")
+
+    bits = []
+    if "COPPER_USD" in by_id:
+        bits.append(f"Copper ${by_id['COPPER_USD']['last']:,.0f}/t")
+    if "DXY" in by_id:
+        bits.append(f"DXY {by_id['DXY']['last']:.1f}")
+    if "USDZAR" in by_id:
+        bits.append(f"USD/ZAR {by_id['USDZAR']['last']:.2f}")
+    if "SA_EQUITY" in by_id:
+        bits.append(f"SA Equity (EZA) ${by_id['SA_EQUITY']['last']:.2f}")
+    if "POLICY_RATE" in by_id:
+        bits.append(f"BoZ Policy Rate {by_id['POLICY_RATE']['last']:.2f}%")
+    if "CPI_YOY" in by_id:
+        bits.append(f"CPI {by_id['CPI_YOY']['last']:.1f}% YoY")
+    if bits:
+        bullets.append("Active Macro & Regional Backdrop: " + " · ".join(bits) + ".")
+
+    return dict(
+        trend_label=trend,
+        spot_level=spot,
+        ma12w=ma12,
+        ma26w=ma26,
+        range_52w=range52,
+        vol12w_ann_pct=vol12,
+        vol52w_ann_pct=vol52,
+        bullets=bullets,
+    )
 
 
 @app.get("/api/overview")
@@ -236,18 +357,37 @@ def overview():
         if s.empty:
             continue
         last = float(s.iloc[-1])
+
         def chg(days):
-            ref = s.loc[:s.index[-1] - pd.Timedelta(days=days)]
+            ref = s.loc[: s.index[-1] - pd.Timedelta(days=days)]
             if ref.empty:
                 return None
             r = float(ref.iloc[-1])
             if SERIES[sid]["kind"] == "rate":
                 return last - r
             return (last / r - 1) * 100 if r else None
-        cards.append(dict(series_id=sid, name=m["name"], unit=m["unit"], kind=SERIES[sid]["kind"], last=last,
-                          date=s.index[-1].strftime("%Y-%m-%d"), chg_1w=chg(7), chg_4w=chg(28), chg_12w=chg(84), chg_52w=chg(364),
-                          is_demo=bool(m["is_demo"])))
-    return dict(cards=sorted(cards, key=lambda c: (c["series_id"] != TARGET, c["series_id"])), mode=db.data_mode())
+
+        cards.append(
+            dict(
+                series_id=sid,
+                name=m["name"],
+                unit=m["unit"],
+                kind=SERIES[sid]["kind"],
+                last=last,
+                date=s.index[-1].strftime("%Y-%m-%d"),
+                chg_1w=chg(7),
+                chg_4w=chg(28),
+                chg_12w=chg(84),
+                chg_52w=chg(364),
+                is_demo=bool(m["is_demo"]),
+            )
+        )
+    sorted_cards = sorted(cards, key=lambda c: (c["series_id"] != TARGET, c["series_id"]))
+    return dict(
+        cards=sorted_cards,
+        mode=db.data_mode(),
+        interpretation=_compute_overview_interpretation(sorted_cards),
+    )
 
 
 @app.get("/api/series")
@@ -261,10 +401,16 @@ def series(ids: str = Query(TARGET), start: str | None = None, end: str | None =
             s = s.loc[start:]
         if end:
             s = s.loc[:end]
-        if len(s) > max_points:  # decimate for the browser, keep the last point
-            s = pd.concat([s.iloc[:: int(np.ceil(len(s) / max_points))], s.iloc[[-1]]]).loc[lambda x: ~x.index.duplicated()]
-        out[sid] = dict(dates=[d.strftime("%Y-%m-%d") for d in s.index], values=[round(float(v), 6) for v in s.values],
-                        name=SERIES.get(sid, {}).get("name", sid), unit=SERIES.get(sid, {}).get("unit", ""))
+        if len(s) > max_points:
+            s = pd.concat([s.iloc[:: int(np.ceil(len(s) / max_points))], s.iloc[[-1]]]).loc[
+                lambda x: ~x.index.duplicated()
+            ]
+        out[sid] = dict(
+            dates=[d.strftime("%Y-%m-%d") for d in s.index],
+            values=[round(float(v), 6) for v in s.values],
+            name=SERIES.get(sid, {}).get("name", sid),
+            unit=SERIES.get(sid, {}).get("unit", ""),
+        )
     return out
 
 
@@ -288,7 +434,6 @@ def explain(start: str, end: str, freq: str = "W-FRI", window: int | None = None
 
 @app.get("/api/history")
 def history_drivers(threshold: float = Query(8.0, ge=3.0, le=30.0), freq: str = "W-FRI"):
-    """Major swings in USD/ZMW over the whole history, each attributed to drivers."""
     p = _panel(freq)
     try:
         fit = attribution.fit_driver_model(p)
@@ -303,28 +448,45 @@ def model_summary(freq: str = "W-FRI", window: int | None = None):
     fit = attribution.fit_driver_model(p, window=window)
     rb = attribution.rolling_betas(p, fit)
     return dict(
-        freq=freq, r2=fit.r2, n=fit.n, sample=[fit.sample_start.strftime("%Y-%m-%d"), fit.sample_end.strftime("%Y-%m-%d")],
-        drivers=[dict(driver=d, label=GROUP_LABELS.get(d, d), beta=fit.beta(d), se=float(fit.se[d]),
-                      p_value=float(fit.pvalues[d]), series=p.used[d]) for d in fit.drivers],
-        excluded=fit.excluded, skipped=p.skipped, rolling=rb)
+        freq=freq,
+        r2=fit.r2,
+        n=fit.n,
+        sample=[fit.sample_start.strftime("%Y-%m-%d"), fit.sample_end.strftime("%Y-%m-%d")],
+        drivers=[
+            dict(
+                driver=d,
+                label=GROUP_LABELS.get(d, d),
+                beta=fit.beta(d),
+                se=float(fit.se[d]),
+                p_value=float(fit.pvalues[d]),
+                series=p.used[d],
+            )
+            for d in fit.drivers
+        ],
+        excluded=fit.excluded,
+        skipped=p.skipped,
+        rolling=rb,
+    )
 
 
 @app.get("/api/backtest")
-def get_backtest(freq: str = "W-FRI", horizons: str = "1,4,8,12", step: int = 2):
+def get_backtest(freq: str = "W-FRI", horizons: str = "1,4,8,12", step: int | None = None):
     hs = tuple(int(x) for x in horizons.split(",") if x.strip())
-    return _backtest(freq, hs, step)
+    st = step if step is not None else (2 if freq == "W-FRI" else 1)
+    return _backtest(freq, hs, st)
 
 
 @app.get("/api/forecast")
 def get_forecast(h: int = Query(12, ge=1, le=26), model: str = "auto", freq: str = "W-FRI"):
     p = _panel(freq)
     hs = tuple(sorted({1, 4, 8, 12} | {min(h, 12)}))
-    bt = _backtest(freq, hs, 2)
+    st = 2 if freq == "W-FRI" else 1
+    bt = _backtest(freq, hs, st)
     try:
         f = forecast.make_forecast(p, h, model, bt["summary"])
     except ValueError as e:
         raise HTTPException(422, str(e))
-    f["backtest_summary"] = [r for r in bt["summary"]]
+    f["backtest_summary"] = list(bt["summary"])
     f["is_demo"] = p.is_demo
     return f
 
@@ -348,8 +510,10 @@ def post_scenario(body: ScenarioIn):
 @app.get("/api/scenario/presets")
 def presets(freq: str = "W-FRI"):
     p = _panel(freq)
-    return dict(presets=scenario.available_presets(p),
-                drivers=[dict(driver=d, label=GROUP_LABELS.get(d, d), kind=p.kinds[d]) for d in p.drivers])
+    return dict(
+        presets=scenario.available_presets(p),
+        drivers=[dict(driver=d, label=GROUP_LABELS.get(d, d), kind=p.kinds[d]) for d in p.drivers],
+    )
 
 
 @app.get("/")

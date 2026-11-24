@@ -1,10 +1,4 @@
-"""'What if' shock analysis built on the estimated driver sensitivities.
-
-Impact = sum(beta_i x shock_i) with uncertainty from (a) estimation error in the betas and (b) residual
-noise over the horizon. Sensitivities are estimated on a recent window AND on full history; if they disagree
-the result is flagged as regime-sensitive, because Zambia's FX behaviour has shifted across regimes
-(pre/post debt restructuring, drought years, programme periods).
-"""
+"""'What if' shock analysis built on the estimated driver sensitivities (including SA spillover preset & 99% band)."""
 from __future__ import annotations
 
 import numpy as np
@@ -17,11 +11,12 @@ PRESETS = {
     "copper_crash": dict(label="Copper falls 20%", shocks={"COPPER": -20.0}),
     "copper_rally": dict(label="Copper rallies 15%", shocks={"COPPER": 15.0}),
     "usd_rally": dict(label="Global dollar rallies 5%", shocks={"DXY": 5.0}),
+    "sa_spillover": dict(label="SA spillover (USD/ZAR +8%, EZA -12%, EMB -5%)", shocks={"USDZAR": 8.0, "SA_EQUITY": -12.0, "EM_BOND": -5.0}),
     "oil_spike": dict(label="Oil price spikes 30%", shocks={"BRENT": 30.0}),
     "rate_cut_100": dict(label="BoZ cuts policy rate 100bp", shocks={"POLICY_RATE": -100.0}),
     "risk_off": dict(label="Risk-off: copper -15%, dollar +4%", shocks={"COPPER": -15.0, "DXY": 4.0}),
 }
-Z = {"80": 1.2816, "95": 1.9600}
+Z = {"80": 1.2816, "95": 1.9600, "99": 2.5758}
 
 
 def _convert(panel: Panel, shocks: dict[str, float]) -> dict[str, float]:
@@ -30,7 +25,7 @@ def _convert(panel: Panel, shocks: dict[str, float]) -> dict[str, float]:
         kind = panel.kinds.get(d)
         if kind is None:
             raise ValueError(f"Driver {d!r} is not available in the current data.")
-        out[d] = float(np.log1p(v / 100.0)) if kind == "price" else float(v) / 100.0   # % -> log pts ; bp -> pp
+        out[d] = float(np.log1p(v / 100.0)) if kind == "price" else float(v) / 100.0
     return out
 
 
@@ -57,32 +52,53 @@ def run_scenario(panel: Panel, shocks: dict[str, float], horizon: int = 12, wind
     last = float(panel.levels[TARGET].iloc[-1])
     lvl = lambda x: float(last * np.exp(x))
     pct = lambda x: float((np.exp(x) - 1) * 100)
-    bands = {k: dict(low_pct=pct(c_r - z * sd_r), high_pct=pct(c_r + z * sd_r),
-                     low_level=lvl(c_r - z * sd_r), high_level=lvl(c_r + z * sd_r)) for k, z in Z.items()}
-    unstable = (np.sign(c_r) != np.sign(c_f) and max(abs(c_r), abs(c_f)) > 0.005) or \
-               (abs(c_r - c_f) > 0.5 * max(abs(c_r), abs(c_f), 1e-9) and abs(c_r - c_f) > 0.01)
+    bands = {
+        k: dict(
+            low_pct=pct(c_r - z * sd_r),
+            high_pct=pct(c_r + z * sd_r),
+            low_level=lvl(c_r - z * sd_r),
+            high_level=lvl(c_r + z * sd_r),
+        )
+        for k, z in Z.items()
+    }
+    unstable = (np.sign(c_r) != np.sign(c_f) and max(abs(c_r), abs(c_f)) > 0.005) or (
+        abs(c_r - c_f) > 0.5 * max(abs(c_r), abs(c_f), 1e-9) and abs(c_r - c_f) > 0.01
+    )
     warn = []
     if unstable:
-        warn.append("Regime-sensitive: the recent-window and full-history sensitivities disagree materially. "
-                    "Treat the central estimate as indicative and lean on the wider band.")
-    if fit_ok(recent) < 0.05:
+        warn.append(
+            "Regime-sensitive: the recent-window and full-history sensitivities disagree materially. "
+            "Treat the central estimate as indicative and lean on the wider 95%–99% bands."
+        )
+    if recent.r2 < 0.05:
         warn.append(f"Low explanatory power (R² {recent.r2:.2f}) in the recent window: sensitivities are weakly identified.")
     return dict(
-        shocks=shocks, horizon=horizon, window=window, last_level=last,
-        impact_pct=pct(c_r), impact_level=lvl(c_r), bands=bands,
+        shocks=shocks,
+        horizon=horizon,
+        window=window,
+        last_level=last,
+        impact_pct=pct(c_r),
+        impact_level=lvl(c_r),
+        bands=bands,
         by_driver=[dict(driver=d, label=GROUP_LABELS.get(d, d), impact_pp=v * 100) for d, v in parts.items()],
         recent=dict(impact_pct=pct(c_r), r2=recent.r2, n=recent.n),
         full_history=dict(impact_pct=pct(c_f), r2=full.r2, n=full.n),
-        regime_sensitive=bool(unstable), warnings=warn,
-        reading=("USD/ZMW up = weaker kwacha. Impact is relative to the no-shock baseline over the horizon; "
-                 "it is an estimate from historical co-movement, not a forecast of the shock itself."),
-        available_drivers=[dict(driver=d, label=GROUP_LABELS.get(d, d), kind=panel.kinds[d],
-                                unit="% change" if panel.kinds[d] == "price" else "basis points") for d in recent.drivers],
+        regime_sensitive=bool(unstable),
+        warnings=warn,
+        reading=(
+            "USD/ZMW up = weaker kwacha. Impact is relative to the no-shock baseline over the horizon; "
+            "it is an estimate from historical co-movement, not a forecast of the shock itself."
+        ),
+        available_drivers=[
+            dict(
+                driver=d,
+                label=GROUP_LABELS.get(d, d),
+                kind=panel.kinds[d],
+                unit="% change" if panel.kinds[d] == "price" else "basis points",
+            )
+            for d in recent.drivers
+        ],
     )
-
-
-def fit_ok(fit: DriverFit) -> float:
-    return fit.r2
 
 
 def available_presets(panel: Panel, window: int = 156) -> list[dict]:

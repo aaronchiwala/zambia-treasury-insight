@@ -1,9 +1,8 @@
-"""Driver attribution: *what moved the kwacha, and by how much.*
+"""Driver attribution: what moved USD/ZMW in a window, and how much of the move lines up with each driver.
 
-Method: OLS of USD/ZMW log-returns on contemporaneous driver returns (Newey-West/HAC standard errors).
-Contributions over any window = beta x cumulative driver move; the remainder is reported as
-"unexplained" so the decomposition always adds up exactly. Language is deliberately associative:
-this identifies what *coincided with* and was *statistically associated with* moves — not proof of cause.
+Methodology: HAC-robust OLS on weekly (or monthly) log-returns of prices and first differences of rates,
+over the longest common history of available drivers. Includes trailing-stale recency guard, 95%-99% HAC
+confidence markers, Post-2022 IMF ECF regime comparison, and plain-English interpretation bullets.
 """
 from __future__ import annotations
 
@@ -13,7 +12,7 @@ import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 
-from ..config import GROUP_LABELS, PERIODS_PER_YEAR, TARGET
+from ..config import GROUP_LABELS, TARGET
 from .panel import Panel
 
 Z95 = 1.959964
@@ -22,7 +21,7 @@ Z95 = 1.959964
 @dataclass
 class DriverFit:
     drivers: list[str]
-    params: pd.Series               # includes 'const'
+    params: pd.Series  # includes 'const'
     se: pd.Series
     pvalues: pd.Series
     cov: pd.DataFrame
@@ -39,17 +38,32 @@ class DriverFit:
 
 
 def _select_common_sample(df: pd.DataFrame, drivers: list[str], min_obs: int):
-    """Drop the most recently-starting driver until the common sample is long enough."""
+    """Drop trailing-stale or short-history drivers until the common sample is current and long enough."""
     excluded: list[dict] = []
-    keep = [d for d in drivers if df[d].notna().any()]
+    target_last = df[TARGET].last_valid_index()
+    keep: list[str] = []
+
     for d in drivers:
-        if d not in keep:
+        if d not in df.columns or not df[d].notna().any():
             excluded.append(dict(driver=d, reason="no data"))
+            continue
+        last_d = df[d].last_valid_index()
+        if target_last is not None and last_d is not None:
+            lag_days = int((target_last - last_d).days)
+            if lag_days > 120:
+                excluded.append(
+                    dict(
+                        driver=d,
+                        reason=f"series ends {last_d.strftime('%Y-%m-%d')} ({lag_days}d behind {target_last.strftime('%Y-%m-%d')}); excluded to keep current history",
+                    )
+                )
+                continue
+        keep.append(d)
+
     while keep:
         sub = df[[TARGET] + keep].dropna()
         if len(sub) >= min_obs:
             return sub, keep, excluded
-        # drop the driver with the shortest history
         worst = max(keep, key=lambda d: df[d].first_valid_index() or pd.Timestamp.max)
         n_have = int(df[[TARGET, worst]].dropna().shape[0])
         excluded.append(dict(driver=worst, reason=f"insufficient overlapping history ({n_have} periods; need {min_obs})"))
@@ -57,10 +71,15 @@ def _select_common_sample(df: pd.DataFrame, drivers: list[str], min_obs: int):
     return df[[TARGET]].dropna(), [], excluded
 
 
-def fit_driver_model(panel: Panel, window: int | None = None, min_obs: int | None = None,
-                     end: pd.Timestamp | None = None, drivers: list[str] | None = None) -> DriverFit:
+def fit_driver_model(
+    panel: Panel,
+    window: int | None = None,
+    min_obs: int | None = None,
+    end: pd.Timestamp | None = None,
+    drivers: list[str] | None = None,
+) -> DriverFit:
     if min_obs is None:
-        min_obs = 104 if panel.freq == "W-FRI" else 48   # two years of weekly / four years of monthly data
+        min_obs = 104 if panel.freq == "W-FRI" else 48
     df = panel.returns.copy()
     if end is not None:
         df = df.loc[:end]
@@ -77,10 +96,17 @@ def fit_driver_model(panel: Panel, window: int | None = None, min_obs: int | Non
     res = sm.OLS(y, X).fit(cov_type="HAC", cov_kwds={"maxlags": maxlags})
     resid = res.resid
     return DriverFit(
-        drivers=keep, params=res.params, se=res.bse, pvalues=res.pvalues,
+        drivers=keep,
+        params=res.params,
+        se=res.bse,
+        pvalues=res.pvalues,
         cov=pd.DataFrame(res.cov_params(), index=res.params.index, columns=res.params.index),
-        r2=float(res.rsquared), n=int(res.nobs), resid=resid,
-        resid_sd=float(resid.std(ddof=len(res.params))), sample_start=sub.index[0], sample_end=sub.index[-1],
+        r2=float(res.rsquared),
+        n=int(res.nobs),
+        resid=resid,
+        resid_sd=float(resid.std(ddof=len(res.params))),
+        sample_start=sub.index[0],
+        sample_end=sub.index[-1],
         excluded=excluded,
     )
 
@@ -94,7 +120,13 @@ def _nearest_events(date: pd.Timestamp, events: list[dict], days: int = 10) -> l
     return out
 
 
-def explain_period(panel: Panel, fit: DriverFit, start: str, end: str, events: list[dict] | None = None) -> dict:
+def explain_period(
+    panel: Panel,
+    fit: DriverFit,
+    start: str,
+    end: str,
+    events: list[dict] | None = None,
+) -> dict:
     events = events or []
     lv = panel.levels[TARGET].dropna()
     s_ts, e_ts = pd.Timestamp(start), pd.Timestamp(end)
@@ -108,7 +140,6 @@ def explain_period(panel: Panel, fit: DriverFit, start: str, end: str, events: l
     y = sel[TARGET]
     actual = float(y.sum())  # log points
     n = len(sel)
-
     contribs = {}
     for d in fit.drivers:
         x = sel[d].fillna(0.0)
@@ -116,42 +147,112 @@ def explain_period(panel: Panel, fit: DriverFit, start: str, end: str, events: l
     alpha = fit.beta("const") * n
     explained = sum(contribs.values())
     unexplained = actual - explained - alpha
-
     lvl0, lvl1 = float(lv.loc[s_idx]), float(lv.loc[e_idx])
     pct = (lvl1 / lvl0 - 1) * 100
-
     rows = []
     for d in sorted(contribs, key=lambda k: -abs(contribs[k])):
         xsum = float(sel[d].sum())
-        rows.append(dict(
-            driver=d, label=GROUP_LABELS.get(d, d), contribution_pp=contribs[d] * 100,
-            driver_move=xsum * 100 if panel.kinds[d] == "price" else xsum,
-            driver_move_unit="%" if panel.kinds[d] == "price" else "pp",
-            beta=fit.beta(d), p_value=float(fit.pvalues[d]), significant=bool(fit.pvalues[d] < 0.05),
-        ))
+        pv = float(fit.pvalues[d])
+        conf = "99%" if pv < 0.01 else ("95%" if pv < 0.05 else "n.s.")
+        rows.append(
+            dict(
+                driver=d,
+                label=GROUP_LABELS.get(d, d),
+                contribution_pp=contribs[d] * 100,
+                driver_move=xsum * 100 if panel.kinds[d] == "price" else xsum,
+                driver_move_unit="%" if panel.kinds[d] == "price" else "pp",
+                beta=fit.beta(d),
+                p_value=pv,
+                significant=bool(pv < 0.05),
+                confidence=conf,
+            )
+        )
 
-    # biggest individual periods and what lined up with them
     big = y.reindex(y.abs().sort_values(ascending=False).index).head(5)
     top_periods = []
     for d, v in big.items():
         parts = {k: fit.beta(k) * float(sel.loc[d, k]) if pd.notna(sel.loc[d, k]) else 0.0 for k in fit.drivers}
         dom = max(parts, key=lambda k: abs(parts[k])) if parts else None
         resid_part = float(v) - sum(parts.values()) - fit.beta("const")
-        top_periods.append(dict(
-            date=d.strftime("%Y-%m-%d"), move_pct=float(v) * 100,
-            dominant_driver=GROUP_LABELS.get(dom, dom) if dom and abs(parts[dom]) > abs(resid_part) else "unexplained by model",
-            events=[e["title"] for e in _nearest_events(d, events)],
-        ))
+        top_periods.append(
+            dict(
+                date=d.strftime("%Y-%m-%d"),
+                move_pct=float(v) * 100,
+                dominant_driver=(
+                    GROUP_LABELS.get(dom, dom) if dom and abs(parts[dom]) > abs(resid_part) else "unexplained by model"
+                ),
+                events=[e["title"] for e in _nearest_events(d, events)],
+            )
+        )
 
     in_window = [e for e in events if s_idx - pd.Timedelta(days=7) <= pd.Timestamp(e["date"]) <= e_idx]
+
+    # Post-2022 IMF ECF regime comparison
+    regime_comp = None
+    try:
+        imf_rows = panel.returns.loc[panel.returns.index >= "2022-09-01"]
+        if len(imf_rows) >= 60:
+            reg_fit = fit_driver_model(panel, window=len(imf_rows), min_obs=45)
+            top_reg = sorted(
+                [
+                    dict(
+                        driver=d,
+                        label=GROUP_LABELS.get(d, d),
+                        beta=reg_fit.beta(d),
+                        p_value=float(reg_fit.pvalues[d]),
+                    )
+                    for d in reg_fit.drivers
+                ],
+                key=lambda r: r["p_value"],
+            )[:4]
+            regime_comp = dict(
+                label="Post-2022 IMF ECF Regime",
+                r2=reg_fit.r2,
+                n=reg_fit.n,
+                sample=[reg_fit.sample_start.strftime("%Y-%m-%d"), reg_fit.sample_end.strftime("%Y-%m-%d")],
+                top_drivers=top_reg,
+            )
+    except Exception:  # noqa: BLE001 - optional check
+        regime_comp = None
+
+    exp_share = None if abs(actual) < 1e-9 else float((explained + alpha) / actual)
+    s_start = fit.sample_start.strftime("%Y-%m-%d") if fit.sample_start is not None else ""
+    s_end = fit.sample_end.strftime("%Y-%m-%d") if fit.sample_end is not None else ""
+    interpretation_guide = [
+        (
+            "Flat window."
+            if exp_share is None
+            else f"Explained Share: {min(100, max(0, exp_share * 100)):.0f}% of the net move aligns with tracked macro drivers & drift; "
+            f"the remaining {abs(unexplained * 100):.1f}pp reflects domestic FX liquidity, IMF headlines, or unmodeled flows."
+        ),
+        f"Confidence Levels (95% & 99%): Drivers marked (**) reach 99% confidence (p < 0.01); (*) marks 95% confidence (p < 0.05) under Newey-West HAC errors. "
+        f"Weekly R² ({fit.r2:.2f}) is naturally modest in frontier FX; switch to Monthly (ME) to include ZamStats inflation plus SA 3M and 10Y yields.",
+        (
+            f"Regime check: Since Sep 2022 (IMF ECF), model R² is {regime_comp['r2']:.2f} vs {fit.r2:.2f} over {s_start}–{s_end}, "
+            "showing how global and South African sensitivities evolved after restructuring."
+            if regime_comp
+            else "Inspect rolling 2-year betas in the Data tab to check structural breaks across 2020–2022."
+        ),
+    ]
+
     res = dict(
-        start=s_idx.strftime("%Y-%m-%d"), end=e_idx.strftime("%Y-%m-%d"), periods=n,
-        level_start=lvl0, level_end=lvl1, change_pct=pct, log_change_pp=actual * 100,
-        drivers=rows, drift_pp=alpha * 100, unexplained_pp=unexplained * 100,
-        explained_share=(None if abs(actual) < 1e-9 else float((explained + alpha) / actual)),
-        model=dict(r2=fit.r2, n=fit.n, sample=[fit.sample_start.strftime("%Y-%m-%d"), fit.sample_end.strftime("%Y-%m-%d")],
-                   excluded=fit.excluded),
-        top_periods=top_periods, events=in_window,
+        start=s_idx.strftime("%Y-%m-%d"),
+        end=e_idx.strftime("%Y-%m-%d"),
+        freq=panel.freq,
+        periods=n,
+        level_start=lvl0,
+        level_end=lvl1,
+        change_pct=pct,
+        log_change_pp=actual * 100,
+        drivers=rows,
+        drift_pp=alpha * 100,
+        unexplained_pp=unexplained * 100,
+        explained_share=exp_share,
+        model=dict(r2=fit.r2, n=fit.n, sample=[s_start, s_end], excluded=fit.excluded),
+        regime_comparison=regime_comp,
+        interpretation_guide=interpretation_guide,
+        top_periods=top_periods,
+        events=in_window,
     )
     res["narrative"] = _narrative(res, panel.freq)
     return res
@@ -178,39 +279,54 @@ def _narrative(r: dict, freq: str) -> list[str]:
     else:
         out.append("No driver in the model shows a statistically significant, material contribution in this window.")
     if abs(r["unexplained_pp"]) >= 1.0:
-        out.append(f"About {abs(r['unexplained_pp']):.1f}pp of the move is not explained by the tracked drivers "
-                   "(domestic policy, sentiment, flows, debt/programme news, or data not yet in the model).")
+        out.append(
+            f"About {abs(r['unexplained_pp']):.1f}pp of the move is not explained by the tracked drivers "
+            "(domestic policy, sentiment, flows, debt/programme news, or data not yet in the model)."
+        )
     if r["drift_pp"] and abs(r["drift_pp"]) >= 1.0:
         out.append(f"The model's baseline drift accounts for {_fmt(r['drift_pp'])}pp over the window.")
     if r["events"]:
         out.append("Events that coincided with the window: " + "; ".join(f"{e['date']} {e['title']}" for e in r["events"][:5]) + ".")
     if r["model"]["excluded"]:
         ex = ", ".join(f"{e['driver']}" for e in r["model"]["excluded"])
-        out.append(f"Not included for lack of data: {ex}. Adding history for these would sharpen the explanation.")
-    out.append(f"Model fit: R² {r['model']['r2']:.2f} on {r['model']['n']} periods. "
-               "These are associations, not proven causes; read alongside the event markers.")
+        out.append(f"Not included in current sample: {ex}.")
+    out.append(
+        f"Model fit: R² {r['model']['r2']:.2f} on {r['model']['n']} periods. "
+        "These are statistical associations, not proven causes; read alongside the event markers."
+    )
     return out
 
 
-def shock_periods(panel: Panel, fit: DriverFit, events: list[dict], z: float = 3.0) -> list[dict]:
+def shock_periods(panel: Panel, fit: DriverFit, events: list[dict], z: float = 2.5) -> list[dict]:
     """Periods where the move was far larger than the drivers explain -> candidate event-driven shocks."""
     r = fit.resid
     zs = r / fit.resid_sd
     out = []
     for d, zv in zs[zs.abs() >= z].items():
-        out.append(dict(date=d.strftime("%Y-%m-%d"), z=float(zv), unexplained_pct=float(r.loc[d] * 100),
-                        events=[e["title"] for e in _nearest_events(d, events, 10)]))
+        out.append(
+            dict(
+                date=d.strftime("%Y-%m-%d"),
+                z=float(zv),
+                unexplained_pct=float(r.loc[d] * 100),
+                events=[e["title"] for e in _nearest_events(d, events, 10)],
+            )
+        )
     return out
 
 
-def rolling_betas(panel: Panel, fit: DriverFit, window: int = 104) -> dict:
+def rolling_betas(panel: Panel, fit: DriverFit, window: int | None = None) -> dict:
     from statsmodels.regression.rolling import RollingOLS
+
     if not fit.drivers:
         return {}
+    w = window or (104 if panel.freq == "W-FRI" else 36)
     sub = panel.returns[[TARGET] + fit.drivers].dropna()
-    if len(sub) < window + 10:
+    if len(sub) < w + 8:
         return {}
     X = sm.add_constant(sub[fit.drivers])
-    rr = RollingOLS(sub[TARGET], X, window=window).fit()
+    rr = RollingOLS(sub[TARGET], X, window=w).fit()
     p = rr.params.dropna()
-    return {"dates": [d.strftime("%Y-%m-%d") for d in p.index], "betas": {c: p[c].round(4).tolist() for c in fit.drivers}}
+    return {
+        "dates": [d.strftime("%Y-%m-%d") for d in p.index],
+        "betas": {c: p[c].round(4).tolist() for c in fit.drivers},
+    }
