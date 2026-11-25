@@ -5,7 +5,7 @@ import io
 
 import pandas as pd
 
-from .base import http_get, to_usd_per_tonne
+from .base import BROWSER_UA, http_get, to_usd_per_tonne
 
 URL = "https://stooq.com/q/d/l/"
 
@@ -23,5 +23,5 @@ def parse_csv(text: str) -> pd.Series:
 
 
 def fetch_series() -> pd.Series:
-    r = http_get(URL, params={"s": "hg.f", "i": "d"})
+    r = http_get(URL, params={"s": "hg.f", "i": "d"}, headers=BROWSER_UA, retries=2)
     return parse_csv(r.text)

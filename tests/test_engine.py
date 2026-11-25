@@ -124,3 +124,27 @@ def test_history_episodes_and_years_add_up():
     ends = [e["end"] for e in j["episodes"]]
     starts = [e["start"] for e in j["episodes"]]
     assert all(a >= b for a, b in zip(starts[1:], ends[:-1]))
+
+
+def _copper_signal(drop):
+    import pandas as pd
+    from app import db
+    from app.analytics.attribution import compute_treasury_signals
+    from app.analytics.panel import build_panel
+    def load(sid):
+        if sid in drop:
+            return pd.Series(dtype=float)
+        if sid == "COPPER_USD_M":       # demo data has no monthly copper: build one from the daily series
+            return db.load_series("COPPER_USD").resample("MS").last()
+        return db.load_series(sid)
+    out = compute_treasury_signals(build_panel("W-FRI"), load, {"copper": "HTTP 429 from Yahoo"})
+    sigs = out["signals"] if isinstance(out, dict) and "signals" in out else out
+    return next(x for x in sigs if x["id"] == "copper")
+
+
+def test_copper_monitor_falls_back_to_monthly_and_explains_when_empty():
+    assert "COMEX daily" in _copper_signal(set())["reading"]
+    m = _copper_signal({"COPPER_USD"})
+    assert "IMF monthly" in m["reading"] and m["reading"].startswith("$")
+    n = _copper_signal({"COPPER_USD", "COPPER_USD_M"})
+    assert n["reading"].startswith("Unavailable") and "HTTP 429" in n["reading"]

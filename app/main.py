@@ -309,7 +309,9 @@ def _compute_overview_interpretation(cards: list[dict]) -> dict:
     bullets: list[str] = []
     fx = by_id.get(TARGET)
     if fx:
-        yoy = f"weaker by +{abs(fx['chg_52w']):.1f}%" if (fx["chg_52w"] or 0) >= 0 else f"stronger by {abs(fx['chg_52w']):.1f}%"
+        c52 = fx.get("chg_52w")
+        yoy = ("not enough history for a 12-month change" if c52 is None
+               else f"weaker by +{abs(c52):.1f}%" if c52 >= 0 else f"stronger by {abs(c52):.1f}%")
         rng_txt = (
             f" Spot sits at the {range52['percentile']:.0f}th percentile of its 52-week range ({range52['low']:.2f}–{range52['high']:.2f})."
             if range52
@@ -403,7 +405,11 @@ def overview():
 @app.get("/api/treasury-signals")
 def treasury_signals():
     p = _panel("W-FRI")
-    return attribution.compute_treasury_signals(p, db.load_series)
+    issues = {}
+    for r in db.latest_problems():
+        if "opper" in r["series_id"] and r["status"] == "error":
+            issues["copper"] = (r["message"] or "")[:160]
+    return attribution.compute_treasury_signals(p, db.load_series, issues)
 
 
 @app.get("/api/series")

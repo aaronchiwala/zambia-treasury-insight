@@ -508,7 +508,7 @@ def rolling_betas(panel: Panel, fit: DriverFit, window: int | None = None) -> di
     }
 
 
-def compute_treasury_signals(panel: Panel, load_series_fn) -> dict:
+def compute_treasury_signals(panel: Panel, load_series_fn, issues: dict | None = None) -> dict:
     """Synthesize appreciation vs depreciation signals & actionable treasury guidance."""
     lvls = panel.levels[TARGET].dropna()
     rets = panel.returns[TARGET].dropna()
@@ -545,6 +545,12 @@ def compute_treasury_signals(panel: Panel, load_series_fn) -> dict:
 
     cu_last, cu_4w = _chg("COPPER_USD", 28, "price")
     _, cu_12w = _chg("COPPER_USD", 84, "price")
+    cu_basis = "COMEX daily"
+    if cu_last is None or cu_12w is None:
+        # Daily feed not loaded: fall back to the monthly IMF series so the monitor still says something useful.
+        m_last, m_3m = _chg("COPPER_USD_M", 90, "price")
+        if m_last is not None and m_3m is not None:
+            cu_last, cu_12w, cu_4w, cu_basis = m_last, m_3m, None, "IMF monthly (daily feed not loaded)"
     dxy_last, dxy_4w = _chg("DXY", 28, "price")
     vix_last, _ = _chg("VIX", 28, "price")
     _, emb_4w = _chg("EM_BOND", 28, "price")
@@ -561,10 +567,10 @@ def compute_treasury_signals(panel: Panel, load_series_fn) -> dict:
     signals = []
 
     cu_stance = "neutral"
-    if cu_12w is not None and cu_4w is not None:
-        if cu_12w >= 4 and cu_4w >= 1:
+    if cu_12w is not None:
+        if cu_12w >= 4 and (cu_4w is None or cu_4w >= 1):
             cu_stance = "appreciation"
-        elif cu_12w <= -4 or cu_4w <= -3.5:
+        elif cu_12w <= -4 or (cu_4w is not None and cu_4w <= -3.5):
             cu_stance = "depreciation"
     signals.append(
         dict(
@@ -572,13 +578,14 @@ def compute_treasury_signals(panel: Panel, load_series_fn) -> dict:
             pillar="Copper & Export Inflows",
             stance=cu_stance,
             stance_label="Appreciation Support" if cu_stance == "appreciation" else ("Depreciation Risk" if cu_stance == "depreciation" else "Neutral"),
-            reading=f"${cu_last:,.0f}/t ({cu_12w:+.1f}% 12w)" if (cu_last and cu_12w is not None) else "Unavailable",
+            reading=(f"${cu_last:,.0f}/t ({cu_12w:+.1f}% {'12w' if cu_4w is not None else '3m'}) · {cu_basis}" if (cu_last and cu_12w is not None)
+                     else "Unavailable: no copper price loaded" + (f" ({(issues or {}).get('copper')})" if (issues or {}).get("copper") else "")),
             detail=(
                 "Firm copper receipts boost mining FX supply and tax conversions into ZMW."
                 if cu_stance == "appreciation"
                 else ("Softer copper prices reduce expected hard-currency export inflows over coming weeks." if cu_stance == "depreciation" else "Copper is trading near recent equilibrium without a decisive export shock.")
             ),
-            watch_trigger=f"Watch < ${cu_last * 0.94:,.0f}/t for FX inflow squeeze or > ${cu_last * 1.05:,.0f}/t for ZMW rally support." if cu_last else "Monitor COMEX copper breaks.",
+            watch_trigger=f"Watch < ${cu_last * 0.94:,.0f}/t for FX inflow squeeze or > ${cu_last * 1.05:,.0f}/t for ZMW rally support." if cu_last else "Load daily copper (Data & quality > Retry, or upload COPPER_USD.csv) to monitor COMEX 4-week breaks.",
         )
     )
 

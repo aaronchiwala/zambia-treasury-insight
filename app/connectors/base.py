@@ -26,13 +26,18 @@ class SeriesResult:
     notes: str = ""
 
 
-def http_get(url: str, *, params: dict | None = None, timeout: float = 60.0, retries: int = 3) -> httpx.Response:
+BROWSER_UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+              "Accept": "application/json,text/csv,*/*", "Accept-Language": "en-US,en;q=0.9"}
+
+
+def http_get(url: str, *, params: dict | None = None, timeout: float = 60.0, retries: int = 3,
+             headers: dict | None = None) -> httpx.Response:
     """GET with retry/backoff on network errors, 429 and 5xx. Client errors (4xx) fail immediately.
     Raises FeedError with the URL, HTTP status and a snippet of the response body. Honours HTTPS_PROXY."""
     last: FeedError | None = None
     for attempt in range(retries):
         try:
-            r = httpx.get(url, params=params, timeout=timeout, headers=UA, follow_redirects=True)
+            r = httpx.get(url, params=params, timeout=timeout, headers=headers or UA, follow_redirects=True)
         except httpx.TransportError as e:
             last = FeedError(f"{url} -> network error: {type(e).__name__}: {e}")
         else:

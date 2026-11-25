@@ -6,10 +6,11 @@ from urllib.parse import quote
 
 import pandas as pd
 
-from .base import SeriesResult, http_get, to_usd_per_tonne
+from .base import BROWSER_UA, FeedError, SeriesResult, http_get, to_usd_per_tonne
 
 URL = "https://query1.finance.yahoo.com/v8/finance/chart/HG%3DF"
 BASE_CHART = "https://query1.finance.yahoo.com/v8/finance/chart/"
+HOSTS = ("query1.finance.yahoo.com", "query2.finance.yahoo.com")   # Yahoo sometimes rejects one and serves the other
 
 # period1=2013-01-01 avoids Yahoo's range=max decimation to monthly bars
 START_2013_TS = 1356998400
@@ -36,14 +37,22 @@ def parse_chart(payload: dict, convert_copper: bool = True) -> pd.Series:
     return to_usd_per_tonne(s) if convert_copper else s
 
 
+def _chart(symbol: str, params: dict):
+    errs = []
+    for host in HOSTS:
+        try:
+            return http_get(f"https://{host}/v8/finance/chart/{quote(symbol, safe='')}", params=params,
+                            headers=BROWSER_UA, retries=2).json()
+        except FeedError as e:
+            errs.append(str(e))
+    raise FeedError(" | ".join(errs))
+
+
 def fetch_symbol(symbol: str = "HG=F", convert_copper: bool = True) -> pd.Series:
-    endpoint = f"{BASE_CHART}{quote(symbol, safe='')}"
-    now_ts = int(time.time())
-    r = http_get(endpoint, params={"period1": str(START_2013_TS), "period2": str(now_ts), "interval": "1d"})
-    s = parse_chart(r.json(), convert_copper=convert_copper)
+    s = parse_chart(_chart(symbol, {"period1": str(START_2013_TS), "period2": str(int(time.time())), "interval": "1d"}),
+                    convert_copper=convert_copper)
     if len(s) < 250:
-        r2 = http_get(endpoint, params={"range": "10y", "interval": "1d"})
-        s2 = parse_chart(r2.json(), convert_copper=convert_copper)
+        s2 = parse_chart(_chart(symbol, {"range": "10y", "interval": "1d"}), convert_copper=convert_copper)
         if len(s2) > len(s):
             return s2
     return s
